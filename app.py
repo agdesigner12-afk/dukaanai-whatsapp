@@ -361,8 +361,9 @@ Short Hinglish reply (1-2 lines):"""
         traceback.print_exc()
         return "ज़रा रुको, फिर से try करो 🙏"
 
-# ========== ASYNC WEBHOOK HANDLER ==========
+# ========== ASYNC WEBHOOK HANDLER WITH APP CONTEXT ==========
 def send_quick_ack(from_number):
+    """Send immediate acknowledgment (no database needed)"""
     try:
         twilio_client.messages.create(
             body="⏳ Please wait...",
@@ -372,39 +373,75 @@ def send_quick_ack(from_number):
     except Exception as e:
         print(f"❌ Ack Error: {e}")
 
-def process_ai_response_async(from_number, body, customer):
+def process_ai_response_async(from_number, body, customer_data):
+    """Process AI in background with app context"""
     try:
-        response = get_ai_response(customer, body)
-        twilio_client.messages.create(
-            body=response,
-            from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
-            to=from_number
-        )
+        # IMPORTANT: Database operations need app context
+        with app.app_context():
+            # Get fresh customer object within app context
+            customer = Customer.query.get(customer_data['id'])
+            if not customer:
+                print(f"❌ Customer not found: {customer_data['id']}")
+                return
+            
+            response = get_ai_response(customer, body)
+        
+        # Send response (Twilio call doesn't need app context)
+        if response:
+            twilio_client.messages.create(
+                body=response,
+                from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+                to=from_number
+            )
     except Exception as e:
         print(f"❌ Process Error: {e}")
+        traceback.print_exc()
+        # Send error message to user
+        try:
+            twilio_client.messages.create(
+                body="थोड़ी देर में try करें। 😊",
+                from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+                to=from_number
+            )
+        except:
+            pass
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Async webhook handler with proper app context"""
     data = request.form
     from_number = data.get('From')
     body = data.get('Body', '').strip()
     
     print(f"\n📩 New message from {from_number}")
     
-    customer = Customer.query.filter_by(phone=from_number).first()
-    if not customer:
-        business = Business.query.first()
-        customer = Customer(
-            business_id=business.id,
-            phone=from_number,
-            name=f"User_{from_number[-4:]}"
-        )
-        db.session.add(customer)
-        db.session.commit()
-        print(f"✅ New customer: {customer.name}")
+    # Database operations need app context
+    with app.app_context():
+        customer = Customer.query.filter_by(phone=from_number).first()
+        if not customer:
+            business = Business.query.first()
+            customer = Customer(
+                business_id=business.id,
+                phone=from_number,
+                name=f"User_{from_number[-4:]}"
+            )
+            db.session.add(customer)
+            db.session.commit()
+            print(f"✅ New customer: {customer.name}")
+        
+        # Store customer data for async processing
+        customer_data = {
+            'id': customer.id,
+            'name': customer.name,
+            'phone': customer.phone,
+            'balance': customer.balance
+        }
     
+    # Send immediate acknowledgment (no database needed)
     executor.submit(send_quick_ack, from_number)
-    executor.submit(process_ai_response_async, from_number, body, customer)
+    
+    # Process AI in background with app context
+    executor.submit(process_ai_response_async, from_number, body, customer_data)
     
     return "OK", 200
 
