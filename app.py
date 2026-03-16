@@ -11,6 +11,9 @@ import io
 from twilio.rest import Client
 from google import genai
 import traceback
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Fix encoding for Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -39,8 +42,12 @@ twilio_client = Client(
 # Initialize Google Gemini
 gemini_client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
 
+# Thread pool for async processing
+executor = ThreadPoolExecutor(max_workers=5)
+
 # ========== DATABASE MODELS ==========
 class Business(db.Model):
+    __tablename__ = 'business'
     id = db.Column(db.Integer, primary_key=True)
     phone = db.Column(db.String(20), unique=True, nullable=False)
     name = db.Column(db.String(100))
@@ -48,9 +55,10 @@ class Business(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Customer(db.Model):
+    __tablename__ = 'customer'
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
-    phone = db.Column(db.String(20))
+    phone = db.Column(db.String(20), index=True)
     name = db.Column(db.String(100))
     balance = db.Column(db.Float, default=0.0)
     total_orders = db.Column(db.Integer, default=0)
@@ -59,6 +67,7 @@ class Customer(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Product(db.Model):
+    __tablename__ = 'product'
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
     name = db.Column(db.String(200))
@@ -69,115 +78,105 @@ class Product(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Order(db.Model):
+    __tablename__ = 'order'
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
     items = db.Column(db.Text)
     total = db.Column(db.Float)
-    status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(20), default='pending', index=True)
     source = db.Column(db.String(20), default='whatsapp')
     payment_method = db.Column(db.String(20), default='cash')
     notes = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     completed_at = db.Column(db.DateTime, nullable=True)
 
 class Conversation(db.Model):
+    __tablename__ = 'conversation'
     id = db.Column(db.Integer, primary_key=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
     message = db.Column(db.Text)
     response = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class TempOrder(db.Model):
+    __tablename__ = 'temp_order'
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), index=True)
+    product_id = db.Column(db.Integer)
+    product_name = db.Column(db.String(200))
+    quantity = db.Column(db.Integer)
+    unit = db.Column(db.String(20))
+    price = db.Column(db.Float)
+    total = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, default=lambda: datetime.utcnow() + timedelta(minutes=5))
+
 # Create tables
 with app.app_context():
-    db.drop_all()
     db.create_all()
-    print("✅ Database created fresh!")
+    print("✅ Database created/verified!")
 
-    # Create a default business
-    default_business = Business(
-        phone="owner",
-        name="Test Shop",
-        business_name="DukaanAI Demo"
-    )
-    db.session.add(default_business)
-    db.session.commit()
-    print("✅ Default business created")
+    # Create a default business if none exists
+    if not Business.query.first():
+        default_business = Business(
+            phone="owner",
+            name="Test Shop",
+            business_name="DukaanAI Demo"
+        )
+        db.session.add(default_business)
+        db.session.commit()
+        print("✅ Default business created")
     
-    # Add sample products
-    business = Business.query.first()
-    products = [
-        Product(business_id=business.id, name="गोल्ड चाय पत्ती", price=250, unit="kg", stock=15, total_sold=0),
-        Product(business_id=business.id, name="Tata नमक", price=25, unit="kg", stock=8, total_sold=0),
-        Product(business_id=business.id, name="फोर्ट बिस्कुट", price=10, unit="piece", stock=45, total_sold=0)
-    ]
-    db.session.add_all(products)
-    db.session.commit()
-    print("✅ Sample products added")
+    # Add sample products if none exist
+    if Product.query.count() == 0:
+        business = Business.query.first()
+        products = [
+            Product(business_id=business.id, name="गोल्ड चाय पत्ती", price=250, unit="kg", stock=15, total_sold=0),
+            Product(business_id=business.id, name="Tata नमक", price=25, unit="kg", stock=8, total_sold=0),
+            Product(business_id=business.id, name="फोर्ट बिस्कुट", price=10, unit="piece", stock=45, total_sold=0)
+        ]
+        db.session.add_all(products)
+        db.session.commit()
+        print("✅ Sample products added")
     
-    # Add sample customers
-    customers = [
-        Customer(business_id=business.id, name="रमेश कुमार", phone="9876543210", balance=500),
-        Customer(business_id=business.id, name="सुरेश पटेल", phone="9876543211", balance=250),
-        Customer(business_id=business.id, name="महेश शर्मा", phone="9876543212", balance=0)
-    ]
-    db.session.add_all(customers)
-    db.session.commit()
-    print("✅ Sample customers added")
+    # Add sample customers if none exist
+    if Customer.query.count() == 0:
+        business = Business.query.first()
+        customers = [
+            Customer(business_id=business.id, name="रमेश कुमार", phone="9876543210", balance=500),
+            Customer(business_id=business.id, name="सुरेश पटेल", phone="9876543211", balance=250),
+            Customer(business_id=business.id, name="महेश शर्मा", phone="9876543212", balance=0)
+        ]
+        db.session.add_all(customers)
+        db.session.commit()
+        print("✅ Sample customers added")
 
 # ========== ORDER CREATION FUNCTION ==========
-def create_order(from_number, product_name, quantity):
-    """Create a new order in database"""
+def create_order_from_temp(temp_order):
+    """Create actual order from temp order"""
     try:
-        print(f"\n📦 Creating order: {product_name} x{quantity} for {from_number}")
+        customer = Customer.query.get(temp_order.customer_id)
+        product = Product.query.get(temp_order.product_id)
         
-        # Get customer
-        customer = Customer.query.filter_by(phone=from_number).first()
-        if not customer:
-            print("❌ Customer not found")
-            return "❌ Customer not found"
+        if not customer or not product:
+            return False, "Customer or product not found"
         
-        # Find product
-        product = None
-        product_search = product_name.lower()
+        if product.stock < temp_order.quantity:
+            return False, f"Only {product.stock} {product.unit} available"
         
-        # Product mapping
-        if any(word in product_search for word in ['चावल', 'rice', 'chawal']):
-            product = Product.query.filter(Product.name.contains('चावल')).first()
-        elif any(word in product_search for word in ['नमक', 'salt', 'namak']):
-            product = Product.query.filter(Product.name.contains('नमक')).first()
-        elif any(word in product_search for word in ['चाय', 'tea', 'chai', 'patti']):
-            product = Product.query.filter(Product.name.contains('चाय')).first()
-        elif any(word in product_search for word in ['बिस्कुट', 'biscuit']):
-            product = Product.query.filter(Product.name.contains('बिस्कुट')).first()
-        
-        if not product:
-            print(f"❌ Product '{product_name}' not found")
-            return f"❌ प्रोडक्ट '{product_name}' नहीं मिला। प्रोडक्ट लिस्ट के लिए 'product' लिखें।"
-        
-        print(f"✅ Found product: {product.name} (Stock: {product.stock})")
-        
-        # Check stock
-        if product.stock < quantity:
-            print(f"❌ Insufficient stock: have {product.stock}, need {quantity}")
-            return f"❌ केवल {product.stock} {product.unit} स्टॉक में है।"
-        
-        # Create order items JSON
         items = json.dumps([{
             'product_id': product.id,
             'name': product.name,
-            'quantity': quantity,
+            'quantity': temp_order.quantity,
             'price': product.price
         }])
         
-        total = product.price * quantity
-        
-        # Create order
         order = Order(
             business_id=customer.business_id,
             customer_id=customer.id,
             items=items,
-            total=total,
+            total=temp_order.total,
             status='pending',
             source='whatsapp',
             payment_method='cash',
@@ -187,183 +186,240 @@ def create_order(from_number, product_name, quantity):
         db.session.add(order)
         
         # Update stock and customer stats
-        old_stock = product.stock
-        product.stock -= quantity
-        product.total_sold += quantity
+        product.stock -= temp_order.quantity
+        product.total_sold += temp_order.quantity
         customer.total_orders += 1
-        customer.total_spent += total
+        customer.total_spent += temp_order.total
         customer.last_order_date = datetime.utcnow()
         
-        print(f"📊 Stock updated: {old_stock} -> {product.stock}")
-        
-        # Commit all changes
+        db.session.delete(temp_order)
         db.session.commit()
-        print(f"✅ Order #{order.id} created successfully")
         
-        return f"""✅ *ऑर्डर कन्फर्म!*
+        return True, order
+        
+    except Exception as e:
+        print(f"❌ Error creating order from temp: {e}")
+        db.session.rollback()
+        return False, str(e)
 
-{quantity} {product.unit} {product.name}
-कुल: ₹{total}
+# ========== AI FUNCTIONS WITH CONFIRMATION ==========
+def get_ai_response(customer, message):
+    """AI response with order confirmation"""
+    start_time = time.time()
+    
+    try:
+        print(f"\n🤖 Processing: {message[:30]}...")
+        
+        # Check for pending temp order
+        pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
+        
+        if pending_order:
+            if datetime.utcnow() > pending_order.expires_at:
+                db.session.delete(pending_order)
+                db.session.commit()
+                pending_order = None
+                print("🧹 Expired temp order cleaned up")
+            else:
+                msg_lower = message.lower()
+                
+                confirm_words = ['ha', 'han', 'haan', 'yes', 'confirm', 'ok', 'ठीक है', 'हाँ', 'कन्फर्म']
+                cancel_words = ['nahi', 'no', 'cancel', 'mat karo', 'नहीं', 'कैंसल']
+                
+                if any(word in msg_lower for word in confirm_words):
+                    success, result = create_order_from_temp(pending_order)
+                    if success:
+                        order = result
+                        return f"""✅ *ऑर्डर कन्फर्म!*
+
+{pending_order.quantity} {pending_order.unit} {pending_order.product_name}
+कुल: ₹{pending_order.total}
 
 ऑर्डर ID: #{order.id}
 
 धन्यवाद! 🙏"""
+                    else:
+                        return f"❌ {result}"
+                
+                elif any(word in msg_lower for word in cancel_words):
+                    db.session.delete(pending_order)
+                    db.session.commit()
+                    return "❌ ऑर्डर कैंसल कर दिया गया।"
+                
+                else:
+                    minutes_left = max(1, int((pending_order.expires_at - datetime.utcnow()).total_seconds() / 60))
+                    return f"""🤔 *ऑर्डर पेंडिंग है*
+
+{pending_order.quantity} {pending_order.unit} {pending_order.product_name}
+कुल: ₹{pending_order.total}
+
+✅ *कन्फर्म के लिए*: "ha" या "confirm" लिखें
+❌ *कैंसल के लिए*: "nahi" या "cancel" लिखें
+
+⏳ {minutes_left} मिनट बचे हैं।"""
         
-    except Exception as e:
-        print(f"❌ Error creating order: {str(e)}")
-        traceback.print_exc()
-        db.session.rollback()
-        return "❌ ऑर्डर बनाने में समस्या हुई। कृपया बाद में try करें।"
-
-# ========== AI FUNCTIONS ==========
-def get_ai_response(customer, message):
-    """Get AI-powered response using Google Gemini"""
-    try:
-        print(f"\n🤖 Getting Gemini response for: {message}")
-        
-        # Get recent conversation history
-        recent_chats = Conversation.query.filter_by(customer_id=customer.id).order_by(Conversation.created_at.desc()).limit(5).all()
-        recent_chats.reverse()
-        
-        # Get products for context
-        products = Product.query.all()
-        product_list = "\n".join([f"- {p.name}: ₹{p.price} per {p.unit} (स्टॉक: {p.stock})" for p in products])
-        
-        # Get customer's orders
-        orders = Order.query.filter_by(customer_id=customer.id).order_by(Order.created_at.desc()).limit(3).all()
-        order_list = "\n".join([f"- ऑर्डर #{o.id}: ₹{o.total} - {o.status}" for o in orders]) if orders else "कोई ऑर्डर नहीं"
-        
-        # Create prompt with order creation instruction
-        prompt = f"""You are DukaanAI, a friendly Hindi/English WhatsApp assistant for a small Indian shop.
-
-Customer Name: {customer.name}
-Customer Balance: ₹{customer.balance}
-Total Orders: {customer.total_orders}
-Total Spent: ₹{customer.total_spent}
-
-Available Products:
-{product_list}
-
-Recent Orders:
-{order_list}
-
-Current message: "{message}"
-
-CRITICAL INSTRUCTION - ORDER DETECTION:
-If the message contains a product name AND a quantity (like "2 kg chai", "do kg namak", "5 piece biscuit"), you MUST:
-1. Detect the product and quantity
-2. Create the order immediately
-3. Respond with order confirmation including the order ID
-4. DO NOT ask for confirmation - create order directly
-
-Examples:
-- "2 kg chai" → Create order for 2kg tea
-- "5 नमक" → Create order for 5kg salt  
-- "ek kilo biscuit" → Create order for 1kg biscuit
-
-Otherwise, respond normally:
-1. Respond in Hinglish (mix of Hindi and English)
-2. Be warm, friendly, and helpful
-3. Use emojis occasionally 😊
-4. If they ask about products, list them
-5. If they ask about balance, tell them
-6. Keep responses concise (2-3 sentences)
-
-Response:"""
-
-        print(f"📝 Sending to Gemini...")
-        
-        # Get AI response
-        response = gemini_client.models.generate_content(
-            model='models/gemini-2.5-flash',
-            contents=prompt
-        )
-        
-        ai_response = response.text.strip()
-        print(f"✅ AI response received")
-        
-        # Also check manually for order patterns (backup)
+        # Check for new order patterns
         message_lower = message.lower()
         
-        # Pattern: number + kg/piece + product
         patterns = [
-            (r'(\d+)\s*(?:kg|किलो)\s*(?:चाय|chai|tea|patti)', 'चाय'),
-            (r'(\d+)\s*(?:kg|किलो)\s*(?:नमक|namak|salt)', 'नमक'),
-            (r'(\d+)\s*(?:piece|पीस)\s*(?:बिस्कुट|biscuit)', 'बिस्कुट'),
-            (r'(?:चाय|chai|tea|patti)\s*(\d+)\s*(?:kg|किलो)', 'चाय'),
-            (r'(?:नमक|namak|salt)\s*(\d+)\s*(?:kg|किलो)', 'नमक'),
-            (r'(?:बिस्कुट|biscuit)\s*(\d+)\s*(?:piece|पीस)', 'बिस्कुट')
+            (r'(\d+)\s*(?:kg|किलो)\s*(?:चाय|chai|tea|patti)', 'चाय', 'kg'),
+            (r'(\d+)\s*(?:kg|किलो)\s*(?:नमक|namak|salt)', 'नमक', 'kg'),
+            (r'(\d+)\s*(?:piece|पीस)\s*(?:बिस्कुट|biscuit)', 'बिस्कुट', 'piece'),
+            (r'(?:चाय|chai|tea|patti)\s*(\d+)\s*(?:kg|किलो)', 'चाय', 'kg'),
+            (r'(?:नमक|namak|salt)\s*(\d+)\s*(?:kg|किलो)', 'नमक', 'kg'),
+            (r'(?:बिस्कुट|biscuit)\s*(\d+)\s*(?:piece|पीस)', 'बिस्कुट', 'piece'),
         ]
         
-        for pattern, product_type in patterns:
+        order_detected = False
+        for pattern, product_type, unit in patterns:
             match = re.search(pattern, message_lower)
             if match:
                 quantity = int(match.group(1))
-                print(f"🔍 Manual pattern detected: {product_type} {quantity}")
-                order_result = create_order(customer.phone, product_type, quantity)
-                ai_response = order_result
-                break
+                print(f"🔍 Order detected: {product_type} {quantity} {unit}")
+                order_detected = True
+                
+                product = None
+                if product_type == 'चाय':
+                    product = Product.query.filter(Product.name.contains('चाय')).first()
+                elif product_type == 'नमक':
+                    product = Product.query.filter(Product.name.contains('नमक')).first()
+                elif product_type == 'बिस्कुट':
+                    product = Product.query.filter(Product.name.contains('बिस्कुट')).first()
+                
+                if product:
+                    if product.stock < quantity:
+                        return f"❌ केवल {product.stock} {product.unit} स्टॉक में है।"
+                    
+                    total = product.price * quantity
+                    
+                    temp_order = TempOrder(
+                        customer_id=customer.id,
+                        product_id=product.id,
+                        product_name=product.name,
+                        quantity=quantity,
+                        unit=unit,
+                        price=product.price,
+                        total=total
+                    )
+                    db.session.add(temp_order)
+                    db.session.commit()
+                    
+                    return f"""🤔 *कन्फर्मेशन*
+
+{quantity} {unit} {product.name}
+कुल: ₹{total}
+
+✅ *कन्फर्म के लिए*: "ha" या "confirm"
+❌ *कैंसल के लिए*: "nahi" या "cancel"
+
+कन्फर्म करना है?"""
         
-        # Save to conversation history
-        conv = Conversation(
-            customer_id=customer.id,
-            message=message,
-            response=ai_response
-        )
-        db.session.add(conv)
-        db.session.commit()
-        
-        return ai_response
+        if not order_detected:
+            products = Product.query.limit(3).all()
+            product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
+            
+            recent_chats = Conversation.query.filter_by(customer_id=customer.id).order_by(Conversation.created_at.desc()).limit(2).all()
+            recent_chats.reverse()
+            chat_history = ""
+            for chat in recent_chats:
+                chat_history += f"User: {chat.message}\nBot: {chat.response}\n"
+            
+            prompt = f"""Customer: {customer.name}
+Balance: ₹{customer.balance}
+Message: {message}
+Products: {product_list}
+
+Short Hinglish reply (1-2 lines):"""
+
+            print(f"📝 Sending to Gemini 1.5 Flash...")
+            
+            try:
+                response = gemini_client.models.generate_content(
+                    model='models/gemini-1.5-flash',
+                    contents=prompt,
+                    config={
+                        'temperature': 0.5,
+                        'max_output_tokens': 80,
+                        'top_p': 0.8
+                    }
+                )
+                ai_response = response.text.strip()
+            except Exception as ai_error:
+                print(f"❌ Gemini API Error: {ai_error}")
+                ai_response = "थोड़ी देर में try करें। 😊"
+            
+            conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
+            db.session.add(conv)
+            db.session.commit()
+            
+            end_time = time.time()
+            print(f"✅ Response time: {end_time - start_time:.2f}s")
+            
+            return ai_response
         
     except Exception as e:
-        print(f"\n❌ ERROR in get_ai_response: {type(e).__name__}: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
-        return "🤖 माफ करें, अभी थोड़ी समस्या है। कृपया थोड़ी देर में try करें।"
+        return "ज़रा रुको, फिर से try करो 🙏"
 
-# ========== WHATSAPP MESSAGE HANDLING ==========
-@app.route('/')
-def home():
-    return "✅ AI-Powered DukaanAI WhatsApp Bot is Running!"
+# ========== ASYNC WEBHOOK HANDLER ==========
+def send_quick_ack(from_number):
+    try:
+        twilio_client.messages.create(
+            body="⏳ Please wait...",
+            from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+            to=from_number
+        )
+    except Exception as e:
+        print(f"❌ Ack Error: {e}")
+
+def process_ai_response_async(from_number, body, customer):
+    try:
+        response = get_ai_response(customer, body)
+        twilio_client.messages.create(
+            body=response,
+            from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+            to=from_number
+        )
+    except Exception as e:
+        print(f"❌ Process Error: {e}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Receive messages from WhatsApp via Twilio"""
     data = request.form
-    
     from_number = data.get('From')
     body = data.get('Body', '').strip()
     
-    print(f"\n📩 WhatsApp message from {from_number}: {body}")
+    print(f"\n📩 New message from {from_number}")
     
-    # Get or create customer
     customer = Customer.query.filter_by(phone=from_number).first()
     if not customer:
         business = Business.query.first()
         customer = Customer(
             business_id=business.id,
             phone=from_number,
-            name=f"Customer_{from_number[-4:]}"
+            name=f"User_{from_number[-4:]}"
         )
         db.session.add(customer)
         db.session.commit()
-        print(f"✅ New customer created: {customer.name}")
+        print(f"✅ New customer: {customer.name}")
     
-    # Get AI response
-    response_text = get_ai_response(customer, body)
-    
-    # Send response back via WhatsApp
-    if response_text:
-        try:
-            message = twilio_client.messages.create(
-                body=response_text,
-                from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
-                to=from_number
-            )
-            print(f"✅ Message sent! SID: {message.sid}")
-        except Exception as e:
-            print(f"❌ Twilio Error: {e}")
+    executor.submit(send_quick_ack, from_number)
+    executor.submit(process_ai_response_async, from_number, body, customer)
     
     return "OK", 200
+
+# ========== HEALTH AND STATUS ENDPOINTS ==========
+@app.route('/')
+def home():
+    return "✅ DukaanAI Bot with Order Confirmation!"
+
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "alive",
+        "time": datetime.now().isoformat(),
+        "version": "2.0"
+    })
 
 # ========== API ENDPOINTS ==========
 @app.route('/api/products', methods=['GET'])
@@ -378,58 +434,6 @@ def get_products():
         'total_sold': p.total_sold
     } for p in products])
 
-@app.route('/api/products', methods=['POST'])
-def create_product():
-    """Add a new product"""
-    try:
-        data = request.json
-        print(f"📥 Received product data: {data}")
-        
-        business = Business.query.first()
-        
-        new_product = Product(
-            business_id=business.id,
-            name=data['name'],
-            price=float(data['price']),
-            unit=data['unit'],
-            stock=int(data['stock']),
-            total_sold=0
-        )
-        
-        db.session.add(new_product)
-        db.session.commit()
-        
-        print(f"✅ Product added: {new_product.name}")
-        
-        return jsonify({
-            'success': True,
-            'product': {
-                'id': new_product.id,
-                'name': new_product.name,
-                'price': new_product.price,
-                'unit': new_product.unit,
-                'stock': new_product.stock
-            }
-        }), 201
-        
-    except Exception as e:
-        print(f"❌ Error adding product: {e}")
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/api/customers', methods=['GET'])
-def get_customers():
-    customers = Customer.query.all()
-    return jsonify([{
-        'id': c.id,
-        'name': c.name,
-        'phone': c.phone,
-        'balance': c.balance,
-        'total_orders': c.total_orders,
-        'total_spent': c.total_spent,
-        'last_order_date': c.last_order_date.strftime('%Y-%m-%d') if c.last_order_date else 'Never',
-        'created_at': c.created_at.strftime('%Y-%m-%d')
-    } for c in customers])
-
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
     orders = Order.query.order_by(Order.created_at.desc()).all()
@@ -442,28 +446,9 @@ def get_orders():
             'total': o.total,
             'status': o.status,
             'source': o.source,
-            'payment_method': o.payment_method,
-            'date': o.created_at.strftime('%Y-%m-%d'),
-            'time': o.created_at.strftime('%H:%M')
+            'date': o.created_at.strftime('%Y-%m-%d')
         })
     return jsonify(result)
-
-@app.route('/api/orders/<int:order_id>', methods=['PATCH'])
-def update_order_status(order_id):
-    """Update order status"""
-    try:
-        order = Order.query.get(order_id)
-        if not order:
-            return jsonify({'error': 'Order not found'}), 404
-        
-        data = request.json
-        order.status = data.get('status', order.status)
-        
-        db.session.commit()
-        
-        return jsonify({'success': True, 'status': order.status})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
 
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
@@ -476,19 +461,22 @@ def dashboard():
     low_stock = Product.query.filter(Product.stock < 10).count()
     customers = Customer.query.count()
     new_customers = Customer.query.filter(db.func.date(Customer.created_at) >= week_ago).count()
+    temp_orders = TempOrder.query.count()
     
     return jsonify({
         'today': {'orders': today_orders, 'revenue': float(today_revenue)},
         'pending': pending_orders,
         'lowStock': low_stock,
-        'customers': {'total': customers, 'new': new_customers}
+        'customers': {'total': customers, 'new': new_customers},
+        'tempOrders': temp_orders
     })
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🚀 Starting AI-Powered DukaanAI Bot")
+    print("🚀 DukaanAI Bot with Order Confirmation")
     print("="*60)
-    print(f"📱 Twilio Number: {os.getenv('TWILIO_WHATSAPP_NUMBER')}")
-    print(f"🤖 Google Gemini: {'✅ Connected' if os.getenv('GEMINI_API_KEY') else '❌ Missing'}")
+    print(f"🤖 Model: Gemini 1.5 Flash")
+    print("✅ Order Confirmation: Enabled")
+    print("✅ Temp Orders: 5 min expiry")
     print("="*60 + "\n")
     app.run(debug=True, port=5000)
