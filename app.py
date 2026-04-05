@@ -206,7 +206,7 @@ def call_gemini_api(prompt):
     """Call Gemini API directly with error handling"""
     if not GEMINI_API_KEY:
         print("❌ GEMINI_API_KEY is not set")
-        return "⚠️ API key missing. Please contact support."
+        return "नमस्ते! मैं DukaanAI हूँ। API key missing है।"
     
     # Try different model names
     models_to_try = [
@@ -233,16 +233,25 @@ def call_gemini_api(prompt):
             
             if response.status_code == 200:
                 result = response.json()
-                return result['candidates'][0]['content']['parts'][0]['text'].strip()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                    print(f"✅ Got response from {model}: {text[:50]}...")
+                    return text
+                else:
+                    print(f"⚠️ No candidates in response from {model}")
+                    continue
             else:
                 print(f"⚠️ Model {model} failed: {response.status_code}")
+                if response.status_code == 404:
+                    print(f"   Model {model} not found, trying next...")
                 continue
                 
         except Exception as e:
             print(f"⚠️ Model {model} error: {e}")
             continue
     
-    return "⚠️ थोड़ी देर में try करें। 🙏"
+    # If all models fail, return a friendly message
+    return "नमस्ते! मैं DukaanAI हूँ। आप ऑर्डर दे सकते हैं या प्रोडक्ट देख सकते हैं।"
 
 # ========== AI FUNCTIONS ==========
 def get_ai_response(customer, message):
@@ -365,6 +374,12 @@ Short Hinglish reply (1-2 lines):"""
         
         ai_response = call_gemini_api(prompt)
         
+        # Make sure we have a valid response
+        if not ai_response or len(ai_response.strip()) == 0:
+            ai_response = "नमस्ते! कैसे मदद कर सकता हूँ?"
+        
+        print(f"✅ Final response: {ai_response[:100]}...")
+        
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
         db.session.add(conv)
@@ -376,9 +391,9 @@ Short Hinglish reply (1-2 lines):"""
         return ai_response
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error in get_ai_response: {e}")
         traceback.print_exc()
-        return "⚠️ थोड़ी देर में try करें। 🙏"
+        return "नमस्ते! मैं DukaanAI हूँ। कृपया अपना संदेश दोबारा भेजें। 🙏"
 
 # ========== ASYNC WEBHOOK HANDLER ==========
 def send_quick_ack(from_number):
