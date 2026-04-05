@@ -12,7 +12,7 @@ from twilio.rest import Client
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
-import google.generativeai as genai
+import requests
 
 # Fix encoding for Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -38,11 +38,8 @@ twilio_client = Client(
     os.getenv('TWILIO_AUTH_TOKEN')
 )
 
-# Configure Gemini
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-
-# Use gemini-1.0-pro (most stable for this environment)
-GEMINI_MODEL = 'gemini-1.0-pro'
+# Gemini API Key
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # Thread pool for async processing
 executor = ThreadPoolExecutor(max_workers=5)
@@ -204,13 +201,39 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH GEMINI ==========
+# ========== GEMINI 2.5 FLASH API (DIRECT REST CALL) ==========
+def call_gemini(prompt):
+    """Call Gemini 2.5 Flash API directly"""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.5,
+            "maxOutputTokens": 80,
+            "topP": 0.8,
+            "topK": 40
+        }
+    }
+    
+    response = requests.post(url, json=payload, timeout=10)
+    
+    if response.status_code == 200:
+        result = response.json()
+        return result['candidates'][0]['content']['parts'][0]['text'].strip()
+    else:
+        print(f"❌ API Error: {response.status_code} - {response.text}")
+        return None
+
+# ========== AI FUNCTIONS WITH GEMINI 2.5 FLASH ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini 1.0 Pro"""
+    """AI response with Gemini 2.5 Flash"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with Gemini 1.0 Pro: {message[:30]}...")
+        print(f"\n🤖 Processing with Gemini 2.5 Flash: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -310,7 +333,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini
+        # Normal conversation - use Gemini 2.5 Flash
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -321,22 +344,13 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to Gemini 1.0 Pro...")
+        print(f"📝 Sending to Gemini 2.5 Flash...")
         
-        # Gemini API call
-        model = genai.GenerativeModel('gemini-1.0-pro')
+        # Call Gemini 2.5 Flash API
+        ai_response = call_gemini(prompt)
         
-        response = model.generate_content(
-            prompt,
-            generation_config={
-                'temperature': 0.5,
-                'max_output_tokens': 80,
-                'top_p': 0.8,
-                'top_k': 40
-            }
-        )
-        
-        ai_response = response.text.strip()
+        if ai_response is None:
+            ai_response = "⚠️ थोड़ी देर में try करें। 🙏"
         
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
@@ -344,7 +358,7 @@ Short Hinglish reply (1-2 lines):"""
         db.session.commit()
         
         end_time = time.time()
-        print(f"✅ Gemini response time: {end_time - start_time:.2f}s")
+        print(f"✅ Gemini 2.5 Flash response time: {end_time - start_time:.2f}s")
         
         return ai_response
         
@@ -433,7 +447,7 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with Gemini 1.0 Pro!"
+    return "✅ DukaanAI Bot with Gemini 2.5 Flash!"
 
 @app.route('/health')
 def health():
@@ -441,7 +455,7 @@ def health():
         "status": "alive",
         "time": datetime.now().isoformat(),
         "version": "2.0",
-        "model": "Gemini 1.0 Pro"
+        "model": "Gemini 2.5 Flash"
     })
 
 # ========== API ENDPOINTS ==========
@@ -497,9 +511,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Gemini 1.0 Pro")
+    print("🚀 DukaanAI Bot with Gemini 2.5 Flash")
     print("="*60)
-    print(f"🤖 Model: Gemini 1.0 Pro (Stable)")
+    print(f"🤖 Model: Gemini 2.5 Flash (Latest)")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
