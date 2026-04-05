@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import sys
 import io
 from twilio.rest import Client
-from openai import OpenAI
+import requests
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -36,12 +36,6 @@ db = SQLAlchemy(app)
 twilio_client = Client(
     os.getenv('TWILIO_ACCOUNT_SID'),
     os.getenv('TWILIO_AUTH_TOKEN')
-)
-
-# Initialize DeepSeek client (OpenAI-compatible)
-deepseek_client = OpenAI(
-    api_key=os.getenv('GEMINI_API_KEY'),  # Same env variable, but now DeepSeek key
-    base_url="https://api.deepseek.com/v1"
 )
 
 # Thread pool for async processing
@@ -204,9 +198,9 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH DEEPSEEK ==========
+# ========== AI FUNCTIONS WITH DIRECT DEEPSEEK API ==========
 def get_ai_response(customer, message):
-    """AI response with DeepSeek"""
+    """AI response with DeepSeek via direct API call"""
     start_time = time.time()
     
     try:
@@ -313,7 +307,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use DeepSeek
+        # Normal conversation - Direct API call to DeepSeek
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -326,19 +320,37 @@ Products: {product_list}
 
 Respond in short Hinglish (1-2 lines only):"""
 
-        print(f"📝 Sending to DeepSeek...")
+        print(f"📝 Sending to DeepSeek via direct API...")
         
-        response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
+        # Direct API call to DeepSeek
+        api_key = os.getenv('GEMINI_API_KEY')
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
                 {"role": "system", "content": "You are DukaanAI, a friendly Hindi/English WhatsApp assistant. Keep responses very short (1-2 lines)."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.5,
-            max_tokens=80
+            "temperature": 0.5,
+            "max_tokens": 80
+        }
+        
+        response = requests.post(
+            "https://api.deepseek.com/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=10
         )
         
-        ai_response = response.choices[0].message.content.strip()
+        if response.status_code == 200:
+            ai_response = response.json()['choices'][0]['message']['content'].strip()
+        else:
+            print(f"❌ API Error: {response.status_code} - {response.text}")
+            ai_response = "⚠️ थोड़ी देर में try करें। 🙏"
         
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
@@ -357,6 +369,7 @@ Respond in short Hinglish (1-2 lines only):"""
 
 # ========== ASYNC WEBHOOK HANDLER ==========
 def send_quick_ack(from_number):
+    """Send immediate acknowledgment"""
     try:
         twilio_client.messages.create(
             body="⏳ Please wait...",
@@ -367,6 +380,7 @@ def send_quick_ack(from_number):
         print(f"❌ Ack Error: {e}")
 
 def process_ai_response_async(from_number, body, customer_data):
+    """Process AI in background with app context"""
     try:
         with app.app_context():
             customer = Customer.query.get(customer_data['id'])
@@ -395,6 +409,7 @@ def process_ai_response_async(from_number, body, customer_data):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Async webhook handler with proper app context"""
     data = request.form
     from_number = data.get('From')
     body = data.get('Body', '').strip()
@@ -421,7 +436,10 @@ def webhook():
             'balance': customer.balance
         }
     
+    # Send immediate acknowledgment
     executor.submit(send_quick_ack, from_number)
+    
+    # Process AI in background
     executor.submit(process_ai_response_async, from_number, body, customer_data)
     
     return "OK", 200
