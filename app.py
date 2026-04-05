@@ -201,39 +201,56 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== GEMINI 2.5 FLASH API (DIRECT REST CALL) ==========
-def call_gemini(prompt):
-    """Call Gemini 2.5 Flash API directly"""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+# ========== GEMINI API CALL FUNCTION ==========
+def call_gemini_api(prompt):
+    """Call Gemini API directly with error handling"""
+    if not GEMINI_API_KEY:
+        print("❌ GEMINI_API_KEY is not set")
+        return "⚠️ API key missing. Please contact support."
     
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.5,
-            "maxOutputTokens": 80,
-            "topP": 0.8,
-            "topK": 40
-        }
-    }
+    # Try different model names
+    models_to_try = [
+        "gemini-1.5-flash",
+        "gemini-1.0-pro",
+        "gemini-pro"
+    ]
     
-    response = requests.post(url, json=payload, timeout=10)
+    for model in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+            
+            payload = {
+                "contents": [{
+                    "parts": [{"text": prompt}]
+                }],
+                "generationConfig": {
+                    "temperature": 0.5,
+                    "maxOutputTokens": 80
+                }
+            }
+            
+            response = requests.post(url, json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['candidates'][0]['content']['parts'][0]['text'].strip()
+            else:
+                print(f"⚠️ Model {model} failed: {response.status_code}")
+                continue
+                
+        except Exception as e:
+            print(f"⚠️ Model {model} error: {e}")
+            continue
     
-    if response.status_code == 200:
-        result = response.json()
-        return result['candidates'][0]['content']['parts'][0]['text'].strip()
-    else:
-        print(f"❌ API Error: {response.status_code} - {response.text}")
-        return None
+    return "⚠️ थोड़ी देर में try करें। 🙏"
 
-# ========== AI FUNCTIONS WITH GEMINI 2.5 FLASH ==========
+# ========== AI FUNCTIONS ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini 2.5 Flash"""
+    """AI response with Gemini"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with Gemini 2.5 Flash: {message[:30]}...")
+        print(f"\n🤖 Processing: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -333,7 +350,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini 2.5 Flash
+        # Normal conversation - use Gemini API
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -344,13 +361,9 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to Gemini 2.5 Flash...")
+        print(f"📝 Sending to Gemini API...")
         
-        # Call Gemini 2.5 Flash API
-        ai_response = call_gemini(prompt)
-        
-        if ai_response is None:
-            ai_response = "⚠️ थोड़ी देर में try करें। 🙏"
+        ai_response = call_gemini_api(prompt)
         
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
@@ -358,12 +371,12 @@ Short Hinglish reply (1-2 lines):"""
         db.session.commit()
         
         end_time = time.time()
-        print(f"✅ Gemini 2.5 Flash response time: {end_time - start_time:.2f}s")
+        print(f"✅ Response time: {end_time - start_time:.2f}s")
         
         return ai_response
         
     except Exception as e:
-        print(f"❌ Gemini Error: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
         return "⚠️ थोड़ी देर में try करें। 🙏"
 
@@ -447,15 +460,14 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with Gemini 2.5 Flash!"
+    return "✅ DukaanAI Bot is Running!"
 
 @app.route('/health')
 def health():
     return jsonify({
         "status": "alive",
         "time": datetime.now().isoformat(),
-        "version": "2.0",
-        "model": "Gemini 2.5 Flash"
+        "version": "2.0"
     })
 
 # ========== API ENDPOINTS ==========
@@ -511,9 +523,8 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Gemini 2.5 Flash")
+    print("🚀 DukaanAI Bot Running")
     print("="*60)
-    print(f"🤖 Model: Gemini 2.5 Flash (Latest)")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
