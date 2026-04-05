@@ -316,10 +316,10 @@ Short Hinglish reply (1-2 lines):"""
 
         print(f"📝 Sending to Gemini 1.5 Flash...")
         
-        # Gemini API call
+        # Gemini API call - FIXED MODEL NAME
         import google.generativeai as genai
         genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        gemini_model = genai.GenerativeModel('models/gemini-1.5-flash')  # ← FIXED: 'models/' prefix added
         
         response = gemini_model.generate_content(
             prompt,
