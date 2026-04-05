@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 import sys
 import io
 from twilio.rest import Client
-import requests
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -198,13 +197,13 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH DIRECT DEEPSEEK API ==========
+# ========== AI FUNCTIONS WITH GEMINI ==========
 def get_ai_response(customer, message):
-    """AI response with DeepSeek via direct API call"""
+    """AI response with Gemini (1.5 Flash)"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with DeepSeek: {message[:30]}...")
+        print(f"\n🤖 Processing with Gemini: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -260,9 +259,6 @@ def get_ai_response(customer, message):
             (r'(\d+)\s*(?:kg|किलो)\s*(?:चाय|chai|tea|patti)', 'चाय', 'kg'),
             (r'(\d+)\s*(?:kg|किलो)\s*(?:नमक|namak|salt)', 'नमक', 'kg'),
             (r'(\d+)\s*(?:piece|पीस)\s*(?:बिस्कुट|biscuit)', 'बिस्कुट', 'piece'),
-            (r'(?:चाय|chai|tea|patti)\s*(\d+)\s*(?:kg|किलो)', 'चाय', 'kg'),
-            (r'(?:नमक|namak|salt)\s*(\d+)\s*(?:kg|किलो)', 'नमक', 'kg'),
-            (r'(?:बिस्कुट|biscuit)\s*(\d+)\s*(?:piece|पीस)', 'बिस्कुट', 'piece'),
         ]
         
         for pattern, product_type, unit in patterns:
@@ -307,50 +303,34 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - Direct API call to DeepSeek
+        # Normal conversation - use Gemini
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
-        prompt = f"""You are DukaanAI, a friendly Hindi/English WhatsApp assistant for a small Indian shop.
-
-Customer: {customer.name}
+        prompt = f"""Customer: {customer.name}
 Balance: ₹{customer.balance}
 Message: {message}
 Products: {product_list}
 
-Respond in short Hinglish (1-2 lines only):"""
+Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to DeepSeek via direct API...")
+        print(f"📝 Sending to Gemini 1.5 Flash...")
         
-        # Direct API call to DeepSeek
-        api_key = os.getenv('GEMINI_API_KEY')
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        # Gemini API call
+        import google.generativeai as genai
+        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
         
-        payload = {
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": "You are DukaanAI, a friendly Hindi/English WhatsApp assistant. Keep responses very short (1-2 lines)."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.5,
-            "max_tokens": 80
-        }
-        
-        response = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=10
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config={
+                'temperature': 0.5,
+                'max_output_tokens': 80,
+                'top_p': 0.8
+            }
         )
         
-        if response.status_code == 200:
-            ai_response = response.json()['choices'][0]['message']['content'].strip()
-        else:
-            print(f"❌ API Error: {response.status_code} - {response.text}")
-            ai_response = "⚠️ थोड़ी देर में try करें। 🙏"
+        ai_response = response.text.strip()
         
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
@@ -358,12 +338,12 @@ Respond in short Hinglish (1-2 lines only):"""
         db.session.commit()
         
         end_time = time.time()
-        print(f"✅ DeepSeek response time: {end_time - start_time:.2f}s")
+        print(f"✅ Gemini response time: {end_time - start_time:.2f}s")
         
         return ai_response
         
     except Exception as e:
-        print(f"❌ DeepSeek Error: {e}")
+        print(f"❌ Gemini Error: {e}")
         traceback.print_exc()
         return "⚠️ थोड़ी देर में try करें। 🙏"
 
@@ -447,7 +427,7 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with DeepSeek API!"
+    return "✅ DukaanAI Bot with Gemini API!"
 
 @app.route('/health')
 def health():
@@ -455,7 +435,7 @@ def health():
         "status": "alive",
         "time": datetime.now().isoformat(),
         "version": "2.0",
-        "model": "DeepSeek V3"
+        "model": "Gemini 1.5 Flash"
     })
 
 # ========== API ENDPOINTS ==========
@@ -511,9 +491,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with DeepSeek API")
+    print("🚀 DukaanAI Bot with Gemini API")
     print("="*60)
-    print(f"🤖 Model: DeepSeek V3")
+    print(f"🤖 Model: Gemini 1.5 Flash")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
