@@ -9,9 +9,8 @@ from dotenv import load_dotenv
 import sys
 import io
 from twilio.rest import Client
-from google import genai
+from openai import OpenAI
 import traceback
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,8 +38,11 @@ twilio_client = Client(
     os.getenv('TWILIO_AUTH_TOKEN')
 )
 
-# Initialize Google Gemini
-gemini_client = genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+# Initialize DeepSeek client (OpenAI-compatible)
+deepseek_client = OpenAI(
+    api_key=os.getenv('GEMINI_API_KEY'),  # Same env variable, but now DeepSeek key
+    base_url="https://api.deepseek.com/v1"
+)
 
 # Thread pool for async processing
 executor = ThreadPoolExecutor(max_workers=5)
@@ -202,13 +204,13 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH CONFIRMATION ==========
+# ========== AI FUNCTIONS WITH DEEPSEEK ==========
 def get_ai_response(customer, message):
-    """AI response with order confirmation"""
+    """AI response with DeepSeek"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing: {message[:30]}...")
+        print(f"\n🤖 Processing with DeepSeek: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -252,8 +254,8 @@ def get_ai_response(customer, message):
 {pending_order.quantity} {pending_order.unit} {pending_order.product_name}
 कुल: ₹{pending_order.total}
 
-✅ *कन्फर्म के लिए*: "ha" या "confirm" लिखें
-❌ *कैंसल के लिए*: "nahi" या "cancel" लिखें
+✅ *कन्फर्म के लिए*: "ha" या "confirm"
+❌ *कैंसल के लिए*: "nahi" या "cancel"
 
 ⏳ {minutes_left} मिनट बचे हैं।"""
         
@@ -269,13 +271,11 @@ def get_ai_response(customer, message):
             (r'(?:बिस्कुट|biscuit)\s*(\d+)\s*(?:piece|पीस)', 'बिस्कुट', 'piece'),
         ]
         
-        order_detected = False
         for pattern, product_type, unit in patterns:
             match = re.search(pattern, message_lower)
             if match:
                 quantity = int(match.group(1))
                 print(f"🔍 Order detected: {product_type} {quantity} {unit}")
-                order_detected = True
                 
                 product = None
                 if product_type == 'चाय':
@@ -313,57 +313,50 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        if not order_detected:
-            products = Product.query.limit(3).all()
-            product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
-            
-            recent_chats = Conversation.query.filter_by(customer_id=customer.id).order_by(Conversation.created_at.desc()).limit(2).all()
-            recent_chats.reverse()
-            chat_history = ""
-            for chat in recent_chats:
-                chat_history += f"User: {chat.message}\nBot: {chat.response}\n"
-            
-            prompt = f"""Customer: {customer.name}
+        # Normal conversation - use DeepSeek
+        products = Product.query.limit(3).all()
+        product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
+        
+        prompt = f"""You are DukaanAI, a friendly Hindi/English WhatsApp assistant for a small Indian shop.
+
+Customer: {customer.name}
 Balance: ₹{customer.balance}
 Message: {message}
 Products: {product_list}
 
-Short Hinglish reply (1-2 lines):"""
+Respond in short Hinglish (1-2 lines only):"""
 
-            print(f"📝 Sending to Gemini 1.5 Flash...")
-            
-            try:
-                response = gemini_client.models.generate_content(
-                    model='gemini-1.5-flash',
-                    contents=prompt,
-                    config={
-                        'temperature': 0.5,
-                        'max_output_tokens': 80,
-                        'top_p': 0.8
-                    }
-                )
-                ai_response = response.text.strip()
-            except Exception as ai_error:
-                print(f"❌ Gemini API Error: {ai_error}")
-                ai_response = "थोड़ी देर में try करें। 😊"
-            
-            conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
-            db.session.add(conv)
-            db.session.commit()
-            
-            end_time = time.time()
-            print(f"✅ Response time: {end_time - start_time:.2f}s")
-            
-            return ai_response
+        print(f"📝 Sending to DeepSeek...")
+        
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are DukaanAI, a friendly Hindi/English WhatsApp assistant. Keep responses very short (1-2 lines)."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=80
+        )
+        
+        ai_response = response.choices[0].message.content.strip()
+        
+        # Save conversation
+        conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
+        db.session.add(conv)
+        db.session.commit()
+        
+        end_time = time.time()
+        print(f"✅ DeepSeek response time: {end_time - start_time:.2f}s")
+        
+        return ai_response
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ DeepSeek Error: {e}")
         traceback.print_exc()
-        return "ज़रा रुको, फिर से try करो 🙏"
+        return "⚠️ थोड़ी देर में try करें। 🙏"
 
-# ========== ASYNC WEBHOOK HANDLER WITH APP CONTEXT ==========
+# ========== ASYNC WEBHOOK HANDLER ==========
 def send_quick_ack(from_number):
-    """Send immediate acknowledgment (no database needed)"""
     try:
         twilio_client.messages.create(
             body="⏳ Please wait...",
@@ -374,19 +367,14 @@ def send_quick_ack(from_number):
         print(f"❌ Ack Error: {e}")
 
 def process_ai_response_async(from_number, body, customer_data):
-    """Process AI in background with app context"""
     try:
-        # IMPORTANT: Database operations need app context
         with app.app_context():
-            # Get fresh customer object within app context
             customer = Customer.query.get(customer_data['id'])
             if not customer:
                 print(f"❌ Customer not found: {customer_data['id']}")
                 return
-            
             response = get_ai_response(customer, body)
         
-        # Send response (Twilio call doesn't need app context)
         if response:
             twilio_client.messages.create(
                 body=response,
@@ -396,10 +384,9 @@ def process_ai_response_async(from_number, body, customer_data):
     except Exception as e:
         print(f"❌ Process Error: {e}")
         traceback.print_exc()
-        # Send error message to user
         try:
             twilio_client.messages.create(
-                body="थोड़ी देर में try करें। 😊",
+                body="⚠️ थोड़ी देर में try करें। 🙏",
                 from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
                 to=from_number
             )
@@ -408,14 +395,12 @@ def process_ai_response_async(from_number, body, customer_data):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Async webhook handler with proper app context"""
     data = request.form
     from_number = data.get('From')
     body = data.get('Body', '').strip()
     
     print(f"\n📩 New message from {from_number}")
     
-    # Database operations need app context
     with app.app_context():
         customer = Customer.query.filter_by(phone=from_number).first()
         if not customer:
@@ -429,7 +414,6 @@ def webhook():
             db.session.commit()
             print(f"✅ New customer: {customer.name}")
         
-        # Store customer data for async processing
         customer_data = {
             'id': customer.id,
             'name': customer.name,
@@ -437,10 +421,7 @@ def webhook():
             'balance': customer.balance
         }
     
-    # Send immediate acknowledgment (no database needed)
     executor.submit(send_quick_ack, from_number)
-    
-    # Process AI in background with app context
     executor.submit(process_ai_response_async, from_number, body, customer_data)
     
     return "OK", 200
@@ -448,14 +429,15 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with Order Confirmation!"
+    return "✅ DukaanAI Bot with DeepSeek API!"
 
 @app.route('/health')
 def health():
     return jsonify({
         "status": "alive",
         "time": datetime.now().isoformat(),
-        "version": "2.0"
+        "version": "2.0",
+        "model": "DeepSeek V3"
     })
 
 # ========== API ENDPOINTS ==========
@@ -510,9 +492,9 @@ def dashboard():
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Order Confirmation")
+    print("🚀 DukaanAI Bot with DeepSeek API")
     print("="*60)
-    print(f"🤖 Model: Gemini 1.5 Flash")
+    print("🤖 Model: DeepSeek V3")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
     print("="*60 + "\n")
