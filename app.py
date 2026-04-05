@@ -199,11 +199,11 @@ def create_order_from_temp(temp_order):
 
 # ========== AI FUNCTIONS WITH GEMINI ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini (1.5 Flash)"""
+    """AI response with Gemini Pro"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with Gemini: {message[:30]}...")
+        print(f"\n🤖 Processing with Gemini Pro: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -303,7 +303,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini
+        # Normal conversation - use Gemini Pro
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -314,12 +314,12 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to Gemini 1.5 Flash...")
+        print(f"📝 Sending to Gemini Pro...")
         
-        # Gemini API call - FIXED MODEL NAME
+        # Gemini API call - Using gemini-pro (stable)
         import google.generativeai as genai
         genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-        gemini_model = genai.GenerativeModel('models/gemini-1.5-flash')  # ← FIXED: 'models/' prefix added
+        gemini_model = genai.GenerativeModel('gemini-pro')  # ← Working model
         
         response = gemini_model.generate_content(
             prompt,
@@ -427,7 +427,7 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with Gemini API!"
+    return "✅ DukaanAI Bot with Gemini Pro API!"
 
 @app.route('/health')
 def health():
@@ -435,7 +435,7 @@ def health():
         "status": "alive",
         "time": datetime.now().isoformat(),
         "version": "2.0",
-        "model": "Gemini 1.5 Flash"
+        "model": "Gemini Pro"
     })
 
 # ========== API ENDPOINTS ==========
@@ -491,9 +491,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Gemini API")
+    print("🚀 DukaanAI Bot with Gemini Pro API")
     print("="*60)
-    print(f"🤖 Model: Gemini 1.5 Flash")
+    print(f"🤖 Model: Gemini Pro")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
