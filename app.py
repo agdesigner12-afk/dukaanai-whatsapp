@@ -12,6 +12,7 @@ from twilio.rest import Client
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
+import google.generativeai as genai
 
 # Fix encoding for Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -36,6 +37,13 @@ twilio_client = Client(
     os.getenv('TWILIO_ACCOUNT_SID'),
     os.getenv('TWILIO_AUTH_TOKEN')
 )
+
+# Configure Gemini with latest API
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+
+# Available Gemini models (latest)
+# gemini-2.0-flash-exp, gemini-1.5-flash, gemini-1.5-pro, gemini-pro
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
 
 # Thread pool for async processing
 executor = ThreadPoolExecutor(max_workers=5)
@@ -197,13 +205,13 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH GEMINI ==========
+# ========== AI FUNCTIONS WITH LATEST GEMINI ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini Pro"""
+    """AI response with latest Gemini model"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with Gemini Pro: {message[:30]}...")
+        print(f"\n🤖 Processing with {GEMINI_MODEL}: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -303,7 +311,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini Pro
+        # Normal conversation - use Gemini
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -314,19 +322,18 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to Gemini Pro...")
+        print(f"📝 Sending to {GEMINI_MODEL}...")
         
-        # Gemini API call - Using gemini-pro (stable)
-        import google.generativeai as genai
-        genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-        gemini_model = genai.GenerativeModel('gemini-pro')  # ← Working model
+        # Latest Gemini API call
+        model = genai.GenerativeModel(GEMINI_MODEL)
         
-        response = gemini_model.generate_content(
+        response = model.generate_content(
             prompt,
             generation_config={
                 'temperature': 0.5,
                 'max_output_tokens': 80,
-                'top_p': 0.8
+                'top_p': 0.8,
+                'top_k': 40
             }
         )
         
@@ -427,7 +434,7 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot with Gemini Pro API!"
+    return f"✅ DukaanAI Bot with {GEMINI_MODEL}!"
 
 @app.route('/health')
 def health():
@@ -435,7 +442,7 @@ def health():
         "status": "alive",
         "time": datetime.now().isoformat(),
         "version": "2.0",
-        "model": "Gemini Pro"
+        "model": GEMINI_MODEL
     })
 
 # ========== API ENDPOINTS ==========
@@ -491,9 +498,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Gemini Pro API")
+    print("🚀 DukaanAI Bot with Latest Gemini API")
     print("="*60)
-    print(f"🤖 Model: Gemini Pro")
+    print(f"🤖 Model: {GEMINI_MODEL}")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
