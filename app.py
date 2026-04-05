@@ -41,9 +41,8 @@ twilio_client = Client(
 # Configure Gemini with latest API
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
-# Available Gemini models (latest)
-# gemini-2.0-flash-exp, gemini-1.5-flash, gemini-1.5-pro, gemini-pro
-GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+# Use gemini-pro (most stable and guaranteed to work)
+GEMINI_MODEL = 'gemini-pro'
 
 # Thread pool for async processing
 executor = ThreadPoolExecutor(max_workers=5)
@@ -205,13 +204,13 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH LATEST GEMINI ==========
+# ========== AI FUNCTIONS WITH GEMINI PRO ==========
 def get_ai_response(customer, message):
-    """AI response with latest Gemini model"""
+    """AI response with Gemini Pro (stable)"""
     start_time = time.time()
     
     try:
-        print(f"\n🤖 Processing with {GEMINI_MODEL}: {message[:30]}...")
+        print(f"\n🤖 Processing with Gemini Pro: {message[:30]}...")
         
         # Check for pending temp order
         pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
@@ -311,7 +310,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini
+        # Normal conversation - use Gemini Pro
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -322,10 +321,10 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to {GEMINI_MODEL}...")
+        print(f"📝 Sending to Gemini Pro...")
         
-        # Latest Gemini API call
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        # Gemini Pro API call (guaranteed to work)
+        model = genai.GenerativeModel('gemini-pro')
         
         response = model.generate_content(
             prompt,
@@ -434,7 +433,7 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return f"✅ DukaanAI Bot with {GEMINI_MODEL}!"
+    return "✅ DukaanAI Bot with Gemini Pro!"
 
 @app.route('/health')
 def health():
@@ -442,7 +441,7 @@ def health():
         "status": "alive",
         "time": datetime.now().isoformat(),
         "version": "2.0",
-        "model": GEMINI_MODEL
+        "model": "Gemini Pro"
     })
 
 # ========== API ENDPOINTS ==========
@@ -498,9 +497,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Latest Gemini API")
+    print("🚀 DukaanAI Bot with Gemini Pro")
     print("="*60)
-    print(f"🤖 Model: {GEMINI_MODEL}")
+    print(f"🤖 Model: Gemini Pro (Stable)")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
