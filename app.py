@@ -334,7 +334,7 @@ Short Hinglish reply (1-2 lines):"""
             
             try:
                 response = gemini_client.models.generate_content(
-                    model='models/gemini-1.5-flash',
+                    model='gemini-1.5-flash',
                     contents=prompt,
                     config={
                         'temperature': 0.5,
