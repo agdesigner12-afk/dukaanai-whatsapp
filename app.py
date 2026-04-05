@@ -38,16 +38,16 @@ twilio_client = Client(
     os.getenv('TWILIO_AUTH_TOKEN')
 )
 
-# Configure Gemini with latest API
+# Configure Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
-# Use gemini-1.0-pro (guaranteed to work)
+# Use gemini-1.0-pro (most stable for this environment)
 GEMINI_MODEL = 'gemini-1.0-pro'
 
 # Thread pool for async processing
 executor = ThreadPoolExecutor(max_workers=5)
 
-# ========== DATABASE MODELS (same as before) ==========
+# ========== DATABASE MODELS ==========
 class Business(db.Model):
     __tablename__ = 'business'
     id = db.Column(db.Integer, primary_key=True)
@@ -204,9 +204,9 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== AI FUNCTIONS WITH GEMINI 1.0 PRO ==========
+# ========== AI FUNCTIONS WITH GEMINI ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini 1.0 Pro (stable)"""
+    """AI response with Gemini 1.0 Pro"""
     start_time = time.time()
     
     try:
@@ -310,7 +310,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini 1.0 Pro
+        # Normal conversation - use Gemini
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -323,7 +323,7 @@ Short Hinglish reply (1-2 lines):"""
 
         print(f"📝 Sending to Gemini 1.0 Pro...")
         
-        # Gemini 1.0 Pro API call (guaranteed to work)
+        # Gemini API call
         model = genai.GenerativeModel('gemini-1.0-pro')
         
         response = model.generate_content(
@@ -457,7 +457,7 @@ def get_products():
         'total_sold': p.total_sold
     } for p in products])
 
-@app.route('/api/orders', methods(['GET'])
+@app.route('/api/orders', methods=['GET'])
 def get_orders():
     orders = Order.query.order_by(Order.created_at.desc()).all()
     result = []
