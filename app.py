@@ -116,30 +116,23 @@ with app.app_context():
     db.create_all()
     print("✅ Database created/verified!")
 
-    # Create a default business if none exists
     if not Business.query.first():
-        default_business = Business(
-            phone="owner",
-            name="Test Shop",
-            business_name="DukaanAI Demo"
-        )
+        default_business = Business(phone="owner", name="Test Shop", business_name="DukaanAI Demo")
         db.session.add(default_business)
         db.session.commit()
         print("✅ Default business created")
     
-    # Add sample products if none exist
     if Product.query.count() == 0:
         business = Business.query.first()
         products = [
-            Product(business_id=business.id, name="गोल्ड चाय पत्ती", price=250, unit="kg", stock=15, total_sold=0),
-            Product(business_id=business.id, name="Tata नमक", price=25, unit="kg", stock=8, total_sold=0),
-            Product(business_id=business.id, name="फोर्ट बिस्कुट", price=10, unit="piece", stock=45, total_sold=0)
+            Product(business_id=business.id, name="गोल्ड चाय पत्ती", price=250, unit="kg", stock=15),
+            Product(business_id=business.id, name="Tata नमक", price=25, unit="kg", stock=8),
+            Product(business_id=business.id, name="फोर्ट बिस्कुट", price=10, unit="piece", stock=45)
         ]
         db.session.add_all(products)
         db.session.commit()
         print("✅ Sample products added")
     
-    # Add sample customers if none exist
     if Customer.query.count() == 0:
         business = Business.query.first()
         customers = [
@@ -153,7 +146,6 @@ with app.app_context():
 
 # ========== ORDER CREATION FUNCTION ==========
 def create_order_from_temp(temp_order):
-    """Create actual order from temp order"""
     try:
         customer = Customer.query.get(temp_order.customer_id)
         product = Product.query.get(temp_order.product_id)
@@ -184,7 +176,6 @@ def create_order_from_temp(temp_order):
         
         db.session.add(order)
         
-        # Update stock and customer stats
         product.stock -= temp_order.quantity
         product.total_sold += temp_order.quantity
         customer.total_orders += 1
@@ -201,61 +192,45 @@ def create_order_from_temp(temp_order):
         db.session.rollback()
         return False, str(e)
 
-# ========== GEMINI API CALL FUNCTION ==========
+# ========== GEMINI 2.5 FLASH API CALL ==========
 def call_gemini_api(prompt):
-    """Call Gemini API directly with error handling"""
+    """Call Gemini 2.5 Flash API directly"""
     if not GEMINI_API_KEY:
         print("❌ GEMINI_API_KEY is not set")
-        return "नमस्ते! मैं DukaanAI हूँ। API key missing है।"
+        return "नमस्ते! मैं DukaanAI हूँ।"
     
-    # Try different model names
-    models_to_try = [
-        "gemini-1.5-flash",
-        "gemini-1.0-pro",
-        "gemini-pro"
-    ]
-    
-    for model in models_to_try:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-            
-            payload = {
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": 0.5,
-                    "maxOutputTokens": 80
-                }
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.5,
+                "maxOutputTokens": 80
             }
-            
-            response = requests.post(url, json=payload, timeout=15)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if 'candidates' in result and len(result['candidates']) > 0:
-                    text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                    print(f"✅ Got response from {model}: {text[:50]}...")
-                    return text
-                else:
-                    print(f"⚠️ No candidates in response from {model}")
-                    continue
+        }
+        
+        response = requests.post(url, json=payload, timeout=15)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'candidates' in result and len(result['candidates']) > 0:
+                return result['candidates'][0]['content']['parts'][0]['text'].strip()
             else:
-                print(f"⚠️ Model {model} failed: {response.status_code}")
-                if response.status_code == 404:
-                    print(f"   Model {model} not found, trying next...")
-                continue
+                print(f"⚠️ No candidates in response")
+                return "नमस्ते! मैं DukaanAI हूँ।"
+        else:
+            print(f"❌ API Error: {response.status_code}")
+            return "नमस्ते! मैं DukaanAI हूँ।"
                 
-        except Exception as e:
-            print(f"⚠️ Model {model} error: {e}")
-            continue
-    
-    # If all models fail, return a friendly message
-    return "नमस्ते! मैं DukaanAI हूँ। आप ऑर्डर दे सकते हैं या प्रोडक्ट देख सकते हैं।"
+    except Exception as e:
+        print(f"❌ Gemini API error: {e}")
+        return "नमस्ते! मैं DukaanAI हूँ।"
 
 # ========== AI FUNCTIONS ==========
 def get_ai_response(customer, message):
-    """AI response with Gemini"""
     start_time = time.time()
     
     try:
@@ -269,7 +244,6 @@ def get_ai_response(customer, message):
                 db.session.delete(pending_order)
                 db.session.commit()
                 pending_order = None
-                print("🧹 Expired temp order cleaned up")
             else:
                 msg_lower = message.lower()
                 
@@ -359,7 +333,7 @@ def get_ai_response(customer, message):
 
 कन्फर्म करना है?"""
         
-        # Normal conversation - use Gemini API
+        # Normal conversation - use Gemini 2.5 Flash
         products = Product.query.limit(3).all()
         product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
         
@@ -370,15 +344,12 @@ Products: {product_list}
 
 Short Hinglish reply (1-2 lines):"""
 
-        print(f"📝 Sending to Gemini API...")
+        print(f"📝 Sending to Gemini 2.5 Flash...")
         
         ai_response = call_gemini_api(prompt)
         
-        # Make sure we have a valid response
         if not ai_response or len(ai_response.strip()) == 0:
             ai_response = "नमस्ते! कैसे मदद कर सकता हूँ?"
-        
-        print(f"✅ Final response: {ai_response[:100]}...")
         
         # Save conversation
         conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
@@ -391,13 +362,12 @@ Short Hinglish reply (1-2 lines):"""
         return ai_response
         
     except Exception as e:
-        print(f"❌ Error in get_ai_response: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
-        return "नमस्ते! मैं DukaanAI हूँ। कृपया अपना संदेश दोबारा भेजें। 🙏"
+        return "नमस्ते! मैं DukaanAI हूँ। कृपया दोबारा भेजें। 🙏"
 
 # ========== ASYNC WEBHOOK HANDLER ==========
 def send_quick_ack(from_number):
-    """Send immediate acknowledgment"""
     try:
         twilio_client.messages.create(
             body="⏳ Please wait...",
@@ -408,12 +378,10 @@ def send_quick_ack(from_number):
         print(f"❌ Ack Error: {e}")
 
 def process_ai_response_async(from_number, body, customer_data):
-    """Process AI in background with app context"""
     try:
         with app.app_context():
             customer = Customer.query.get(customer_data['id'])
             if not customer:
-                print(f"❌ Customer not found: {customer_data['id']}")
                 return
             response = get_ai_response(customer, body)
         
@@ -425,7 +393,6 @@ def process_ai_response_async(from_number, body, customer_data):
             )
     except Exception as e:
         print(f"❌ Process Error: {e}")
-        traceback.print_exc()
         try:
             twilio_client.messages.create(
                 body="⚠️ थोड़ी देर में try करें। 🙏",
@@ -437,7 +404,6 @@ def process_ai_response_async(from_number, body, customer_data):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Async webhook handler with proper app context"""
     data = request.form
     from_number = data.get('From')
     body = data.get('Body', '').strip()
@@ -464,10 +430,7 @@ def webhook():
             'balance': customer.balance
         }
     
-    # Send immediate acknowledgment
     executor.submit(send_quick_ack, from_number)
-    
-    # Process AI in background
     executor.submit(process_ai_response_async, from_number, body, customer_data)
     
     return "OK", 200
@@ -475,14 +438,15 @@ def webhook():
 # ========== HEALTH AND STATUS ENDPOINTS ==========
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot is Running!"
+    return "✅ DukaanAI Bot with Gemini 2.5 Flash!"
 
 @app.route('/health')
 def health():
     return jsonify({
         "status": "alive",
         "time": datetime.now().isoformat(),
-        "version": "2.0"
+        "version": "2.0",
+        "model": "Gemini 2.5 Flash"
     })
 
 # ========== API ENDPOINTS ==========
@@ -538,8 +502,9 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "="*60)
-    print("🚀 DukaanAI Bot Running")
+    print("🚀 DukaanAI Bot with Gemini 2.5 Flash")
     print("="*60)
+    print(f"🤖 Model: Gemini 2.5 Flash")
     print(f"✅ Port: {port}")
     print("✅ Order Confirmation: Enabled")
     print("✅ Temp Orders: 5 min expiry")
