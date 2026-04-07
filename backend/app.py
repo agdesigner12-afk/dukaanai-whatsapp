@@ -23,7 +23,7 @@ db = SQLAlchemy(app)
 
 # Twilio + Gemini setup
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-flash-latest')
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 executor = ThreadPoolExecutor(max_workers=5)
 
