@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 api_key = os.getenv('GEMINI_API_KEY')
-model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+model_name = os.getenv('GEMINI_MODEL', 'gemini-pro')
 
 print(f"API Key: {api_key[:10]}...")
 print(f"Model: {model_name}")
