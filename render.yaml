@@ -3,7 +3,7 @@ services:
     name: dukaanai-whatsapp
     runtime: python
     repo: https://github.com/agdesigner12-afk/dukaanai-whatsapp
-    branch: master
+    branch: main
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
