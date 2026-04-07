@@ -1,6 +1,7 @@
 services:
+  # Backend: Flask Web Service
   - type: web
-    name: dukaanai-whatsapp
+    name: dukaanai-backend
     runtime: python
     repo: https://github.com/agdesigner12-afk/dukaanai-whatsapp
     branch: main
@@ -18,3 +19,18 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.0-flash
+
+  # Frontend: React Static Site
+  - type: static_site
+    name: dukaandash-dashboard
+    repo: https://github.com/agdesigner12-afk/dukaanai-whatsapp
+    branch: main
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    publishPath: build
+    envVars:
+      - key: REACT_APP_API_URL
+        fromService:
+          type: web
+          name: dukaanai-backend
+          property: host
