@@ -263,43 +263,54 @@ def home():
     return jsonify({'message': 'DukaanAI API is running!'})
 
 # ========== WHATSAPP BOT ==========
-def get_ai_response_bot(customer_name, customer_balance, message):
-    """Get AI response from Gemini with automatic model fallback"""
+def get_ai_response_bot(customer, message):
+    """AI response with multiple Gemini model fallback"""
+    
+    # List of models to try in order (without 'models/' prefix)
     models_to_try = [
-        os.getenv('GEMINI_MODEL', 'gemini-flash-latest'),
-        'gemini-1.5-pro',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-flash-latest',
         'gemini-pro',
-        'gemini-1.5-flash'
+        'gemini-1.0-pro'
     ]
     
-    products = Product.query.limit(5).all()
-    product_list = "\n".join([f"{p.name}: ₹{p.price}/{p.unit} (stock: {p.stock})" for p in products])
+    # Get products for context
+    products = Product.query.limit(3).all()
+    product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
     
-    prompt = f"""You are a helpful shop assistant for an Indian grocery store.
-Customer: {customer_name}
-Balance: ₹{customer_balance}
-Available Products:\n{product_list}
-Customer message: {message}
+    prompt = f"""Customer: {customer.name}
+Balance: ₹{customer.balance}
+Message: {message}
+Products: {product_list}
 
-Reply in 1-2 lines in Hinglish (Hindi+English mix). Be friendly and helpful."""
-
-    last_error = None
+Short Hinglish reply (1-2 lines):"""
+    
+    # Try each model until one works
     for model_name in models_to_try:
         try:
-            print(f"🤖 Trying Gemini model: {model_name}...")
+            print(f"🤖 Trying model: {model_name}")
+            
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(
                 prompt,
-                generation_config={'temperature': 0.5, 'max_output_tokens': 100}
+                generation_config={
+                    'temperature': 0.5,
+                    'max_output_tokens': 100
+                }
             )
-            return response.text.strip()
-        except Exception as e:
-            last_error = e
-            print(f"⚠️ Model {model_name} failed: {str(e)}")
-            continue
             
-    print(f"❌ All Gemini models failed. Last error: {str(last_error)}")
-    return "Thodi der mein try karein. 🙏"
+            ai_response = response.text.strip()
+            print(f"✅ Success with model: {model_name}")
+            return ai_response
+            
+        except Exception as e:
+            print(f"⚠️ Model {model_name} failed: {e}")
+            continue
+    
+    # If all models fail
+    print("❌ All models failed")
+    return "थोड़ी देर में try करें। 🙏"
 
 def process_whatsapp_message(from_number, body):
     """Process message and send reply via Twilio — no acknowledgment message"""
@@ -315,7 +326,7 @@ def process_whatsapp_message(from_number, body):
                 db.session.add(customer)
                 db.session.commit()
 
-            ai_reply = get_ai_response_bot(customer.name, customer.balance, body)
+            ai_reply = get_ai_response_bot(customer, body)
 
         twilio_client.messages.create(
             body=ai_reply,
