@@ -313,7 +313,10 @@ Short Hinglish reply (1-2 lines):"""
     return "थोड़ी देर में try करें। 🙏"
 
 def process_whatsapp_message(from_number, body):
-    """Process message and send reply via Twilio — no acknowledgment message"""
+    """Process message and send reply via Twilio"""
+    # Remove any leading "Please wait" from message history
+    body = body.replace("Please wait", "").strip()
+    
     try:
         with app.app_context():
             customer = Customer.query.filter_by(phone=from_number).first()
