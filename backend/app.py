@@ -264,12 +264,18 @@ def home():
 
 # ========== WHATSAPP BOT ==========
 def get_ai_response_bot(customer_name, customer_balance, message):
-    """Get AI response from Gemini - no please wait"""
-    try:
-        products = Product.query.limit(5).all()
-        product_list = "\n".join([f"{p.name}: ₹{p.price}/{p.unit} (stock: {p.stock})" for p in products])
-        
-        prompt = f"""You are a helpful shop assistant for an Indian grocery store.
+    """Get AI response from Gemini with automatic model fallback"""
+    models_to_try = [
+        os.getenv('GEMINI_MODEL', 'gemini-flash-latest'),
+        'gemini-1.5-pro',
+        'gemini-pro',
+        'gemini-1.5-flash'
+    ]
+    
+    products = Product.query.limit(5).all()
+    product_list = "\n".join([f"{p.name}: ₹{p.price}/{p.unit} (stock: {p.stock})" for p in products])
+    
+    prompt = f"""You are a helpful shop assistant for an Indian grocery store.
 Customer: {customer_name}
 Balance: ₹{customer_balance}
 Available Products:\n{product_list}
@@ -277,17 +283,23 @@ Customer message: {message}
 
 Reply in 1-2 lines in Hinglish (Hindi+English mix). Be friendly and helpful."""
 
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={'temperature': 0.5, 'max_output_tokens': 100}
-        )
-        return response.text.strip()
-    except Exception as e:
-        import traceback
-        print(f"❌ Gemini Error Detailed: {str(e)}")
-        traceback.print_exc()
-        return "Thodi der mein try karein. 🙏"
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            print(f"🤖 Trying Gemini model: {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(
+                prompt,
+                generation_config={'temperature': 0.5, 'max_output_tokens': 100}
+            )
+            return response.text.strip()
+        except Exception as e:
+            last_error = e
+            print(f"⚠️ Model {model_name} failed: {str(e)}")
+            continue
+            
+    print(f"❌ All Gemini models failed. Last error: {str(last_error)}")
+    return "Thodi der mein try karein. 🙏"
 
 def process_whatsapp_message(from_number, body):
     """Process message and send reply via Twilio — no acknowledgment message"""
