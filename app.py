@@ -3,453 +3,59 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
-import json
 import re
+import json
 from dotenv import load_dotenv
-import sys
-import io
-from twilio.rest import Client
-import traceback
-import time
 from concurrent.futures import ThreadPoolExecutor
-import requests
+import google.generativeai as genai
+from twilio.rest import Client
 
-# Fix encoding for Windows
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-
-# Load environment variables
 load_dotenv()
 
-# Initialize Flask app
 app = Flask(__name__)
+CORS(app)  # Enable CORS for React
 
-# Enable CORS for frontend
-CORS(app)
-
-# Configure database
+# Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///dukaanai.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Initialize Twilio client
-twilio_client = Client(
-    os.getenv('TWILIO_ACCOUNT_SID'),
-    os.getenv('TWILIO_AUTH_TOKEN')
-)
-
-# Gemini API Key
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-
-# Thread pool for async processing
+# Twilio + Gemini setup
+twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 executor = ThreadPoolExecutor(max_workers=5)
 
-# ========== DATABASE MODELS ==========
-class Business(db.Model):
-    __tablename__ = 'business'
+# Models
+class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    phone = db.Column(db.String(20), unique=True, nullable=False)
-    name = db.Column(db.String(100))
-    business_name = db.Column(db.String(100))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    name = db.Column(db.String(100), nullable=False)
+    price = db.Column(db.Float, nullable=False)
+    stock = db.Column(db.Integer, default=0)
+    unit = db.Column(db.String(20), default='kg')
+    total_sold = db.Column(db.Integer, default=0)
 
 class Customer(db.Model):
-    __tablename__ = 'customer'
     id = db.Column(db.Integer, primary_key=True)
-    business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
-    phone = db.Column(db.String(20), index=True)
-    name = db.Column(db.String(100))
-    balance = db.Column(db.Float, default=0.0)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20), unique=True)
+    balance = db.Column(db.Float, default=0)
     total_orders = db.Column(db.Integer, default=0)
-    total_spent = db.Column(db.Float, default=0.0)
-    last_order_date = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class Product(db.Model):
-    __tablename__ = 'product'
-    id = db.Column(db.Integer, primary_key=True)
-    business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
-    name = db.Column(db.String(200))
-    price = db.Column(db.Float)
-    unit = db.Column(db.String(20))
-    stock = db.Column(db.Integer, default=0)
-    total_sold = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    total_spent = db.Column(db.Float, default=0)
+    last_order_date = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
 class Order(db.Model):
-    __tablename__ = 'order'
     id = db.Column(db.Integer, primary_key=True)
-    business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
-    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
-    items = db.Column(db.Text)
-    total = db.Column(db.Float)
-    status = db.Column(db.String(20), default='pending', index=True)
+    customer_name = db.Column(db.String(100))
+    customer_phone = db.Column(db.String(20))
+    total = db.Column(db.Float, default=0)
+    status = db.Column(db.String(20), default='pending')
     source = db.Column(db.String(20), default='whatsapp')
-    payment_method = db.Column(db.String(20), default='cash')
-    notes = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-    completed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
-class Conversation(db.Model):
-    __tablename__ = 'conversation'
-    id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
-    message = db.Column(db.Text)
-    response = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class TempOrder(db.Model):
-    __tablename__ = 'temp_order'
-    id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), index=True)
-    product_id = db.Column(db.Integer)
-    product_name = db.Column(db.String(200))
-    quantity = db.Column(db.Integer)
-    unit = db.Column(db.String(20))
-    price = db.Column(db.Float)
-    total = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    expires_at = db.Column(db.DateTime, default=lambda: datetime.utcnow() + timedelta(minutes=5))
-
-# Create tables
-with app.app_context():
-    db.create_all()
-    print("✅ Database created/verified!")
-
-    if not Business.query.first():
-        default_business = Business(phone="owner", name="Test Shop", business_name="DukaanAI Demo")
-        db.session.add(default_business)
-        db.session.commit()
-        print("✅ Default business created")
-    
-    if Product.query.count() == 0:
-        business = Business.query.first()
-        products = [
-            Product(business_id=business.id, name="गोल्ड चाय पत्ती", price=250, unit="kg", stock=15),
-            Product(business_id=business.id, name="Tata नमक", price=25, unit="kg", stock=8),
-            Product(business_id=business.id, name="फोर्ट बिस्कुट", price=10, unit="piece", stock=45)
-        ]
-        db.session.add_all(products)
-        db.session.commit()
-        print("✅ Sample products added")
-    
-    if Customer.query.count() == 0:
-        business = Business.query.first()
-        customers = [
-            Customer(business_id=business.id, name="रमेश कुमार", phone="9876543210", balance=500),
-            Customer(business_id=business.id, name="सुरेश पटेल", phone="9876543211", balance=250),
-            Customer(business_id=business.id, name="महेश शर्मा", phone="9876543212", balance=0)
-        ]
-        db.session.add_all(customers)
-        db.session.commit()
-        print("✅ Sample customers added")
-
-# ========== ORDER CREATION FUNCTION ==========
-def create_order_from_temp(temp_order):
-    try:
-        customer = Customer.query.get(temp_order.customer_id)
-        product = Product.query.get(temp_order.product_id)
-        
-        if not customer or not product:
-            return False, "Customer or product not found"
-        
-        if product.stock < temp_order.quantity:
-            return False, f"Only {product.stock} {product.unit} available"
-        
-        items = json.dumps([{
-            'product_id': product.id,
-            'name': product.name,
-            'quantity': temp_order.quantity,
-            'price': product.price
-        }])
-        
-        order = Order(
-            business_id=customer.business_id,
-            customer_id=customer.id,
-            items=items,
-            total=temp_order.total,
-            status='pending',
-            source='whatsapp',
-            payment_method='cash',
-            created_at=datetime.utcnow()
-        )
-        
-        db.session.add(order)
-        
-        product.stock -= temp_order.quantity
-        product.total_sold += temp_order.quantity
-        customer.total_orders += 1
-        customer.total_spent += temp_order.total
-        customer.last_order_date = datetime.utcnow()
-        
-        db.session.delete(temp_order)
-        db.session.commit()
-        
-        return True, order
-        
-    except Exception as e:
-        print(f"❌ Error creating order from temp: {e}")
-        db.session.rollback()
-        return False, str(e)
-
-# ========== GEMINI 2.5 FLASH API CALL ==========
-def call_gemini_api(prompt):
-    """Call Gemini 2.5 Flash API directly"""
-    if not GEMINI_API_KEY:
-        print("❌ GEMINI_API_KEY is not set")
-        return "नमस्ते! मैं DukaanAI हूँ।"
-    
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.5,
-                "maxOutputTokens": 80
-            }
-        }
-        
-        response = requests.post(url, json=payload, timeout=15)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if 'candidates' in result and len(result['candidates']) > 0:
-                return result['candidates'][0]['content']['parts'][0]['text'].strip()
-            else:
-                print(f"⚠️ No candidates in response")
-                return "नमस्ते! मैं DukaanAI हूँ।"
-        else:
-            print(f"❌ API Error: {response.status_code}")
-            return "नमस्ते! मैं DukaanAI हूँ।"
-                
-    except Exception as e:
-        print(f"❌ Gemini API error: {e}")
-        return "नमस्ते! मैं DukaanAI हूँ।"
-
-# ========== AI FUNCTIONS ==========
-def get_ai_response(customer, message):
-    start_time = time.time()
-    
-    try:
-        print(f"\n🤖 Processing: {message[:30]}...")
-        
-        # Check for pending temp order
-        pending_order = TempOrder.query.filter_by(customer_id=customer.id).first()
-        
-        if pending_order:
-            if datetime.utcnow() > pending_order.expires_at:
-                db.session.delete(pending_order)
-                db.session.commit()
-                pending_order = None
-            else:
-                msg_lower = message.lower()
-                
-                confirm_words = ['ha', 'han', 'haan', 'yes', 'confirm', 'ok', 'ठीक है', 'हाँ', 'कन्फर्म']
-                cancel_words = ['nahi', 'no', 'cancel', 'mat karo', 'नहीं', 'कैंसल']
-                
-                if any(word in msg_lower for word in confirm_words):
-                    success, result = create_order_from_temp(pending_order)
-                    if success:
-                        order = result
-                        return f"""✅ *ऑर्डर कन्फर्म!*
-
-{pending_order.quantity} {pending_order.unit} {pending_order.product_name}
-कुल: ₹{pending_order.total}
-
-ऑर्डर ID: #{order.id}
-
-धन्यवाद! 🙏"""
-                    else:
-                        return f"❌ {result}"
-                
-                elif any(word in msg_lower for word in cancel_words):
-                    db.session.delete(pending_order)
-                    db.session.commit()
-                    return "❌ ऑर्डर कैंसल कर दिया गया।"
-                
-                else:
-                    minutes_left = max(1, int((pending_order.expires_at - datetime.utcnow()).total_seconds() / 60))
-                    return f"""🤔 *ऑर्डर पेंडिंग है*
-
-{pending_order.quantity} {pending_order.unit} {pending_order.product_name}
-कुल: ₹{pending_order.total}
-
-✅ *कन्फर्म के लिए*: "ha" या "confirm"
-❌ *कैंसल के लिए*: "nahi" या "cancel"
-
-⏳ {minutes_left} मिनट बचे हैं।"""
-        
-        # Check for new order patterns
-        message_lower = message.lower()
-        
-        patterns = [
-            (r'(\d+)\s*(?:kg|किलो)\s*(?:चाय|chai|tea|patti)', 'चाय', 'kg'),
-            (r'(\d+)\s*(?:kg|किलो)\s*(?:नमक|namak|salt)', 'नमक', 'kg'),
-            (r'(\d+)\s*(?:piece|पीस)\s*(?:बिस्कुट|biscuit)', 'बिस्कुट', 'piece'),
-        ]
-        
-        for pattern, product_type, unit in patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                quantity = int(match.group(1))
-                print(f"🔍 Order detected: {product_type} {quantity} {unit}")
-                
-                product = None
-                if product_type == 'चाय':
-                    product = Product.query.filter(Product.name.contains('चाय')).first()
-                elif product_type == 'नमक':
-                    product = Product.query.filter(Product.name.contains('नमक')).first()
-                elif product_type == 'बिस्कुट':
-                    product = Product.query.filter(Product.name.contains('बिस्कुट')).first()
-                
-                if product:
-                    if product.stock < quantity:
-                        return f"❌ केवल {product.stock} {product.unit} स्टॉक में है।"
-                    
-                    total = product.price * quantity
-                    
-                    temp_order = TempOrder(
-                        customer_id=customer.id,
-                        product_id=product.id,
-                        product_name=product.name,
-                        quantity=quantity,
-                        unit=unit,
-                        price=product.price,
-                        total=total
-                    )
-                    db.session.add(temp_order)
-                    db.session.commit()
-                    
-                    return f"""🤔 *कन्फर्मेशन*
-
-{quantity} {unit} {product.name}
-कुल: ₹{total}
-
-✅ *कन्फर्म के लिए*: "ha" या "confirm"
-❌ *कैंसल के लिए*: "nahi" या "cancel"
-
-कन्फर्म करना है?"""
-        
-        # Normal conversation - use Gemini 2.5 Flash
-        products = Product.query.limit(3).all()
-        product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
-        
-        prompt = f"""Customer: {customer.name}
-Balance: ₹{customer.balance}
-Message: {message}
-Products: {product_list}
-
-Short Hinglish reply (1-2 lines):"""
-
-        print(f"📝 Sending to Gemini 2.5 Flash...")
-        
-        ai_response = call_gemini_api(prompt)
-        
-        if not ai_response or len(ai_response.strip()) == 0:
-            ai_response = "नमस्ते! कैसे मदद कर सकता हूँ?"
-        
-        # Save conversation
-        conv = Conversation(customer_id=customer.id, message=message, response=ai_response)
-        db.session.add(conv)
-        db.session.commit()
-        
-        end_time = time.time()
-        print(f"✅ Response time: {end_time - start_time:.2f}s")
-        
-        return ai_response
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        traceback.print_exc()
-        return "नमस्ते! मैं DukaanAI हूँ। कृपया दोबारा भेजें। 🙏"
-
-# ========== ASYNC WEBHOOK HANDLER ==========
-def send_quick_ack(from_number):
-    try:
-        twilio_client.messages.create(
-            body="⏳ Please wait...",
-            from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
-            to=from_number
-        )
-    except Exception as e:
-        print(f"❌ Ack Error: {e}")
-
-def process_ai_response_async(from_number, body, customer_data):
-    try:
-        with app.app_context():
-            customer = Customer.query.get(customer_data['id'])
-            if not customer:
-                return
-            response = get_ai_response(customer, body)
-        
-        if response:
-            twilio_client.messages.create(
-                body=response,
-                from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
-                to=from_number
-            )
-    except Exception as e:
-        print(f"❌ Process Error: {e}")
-        try:
-            twilio_client.messages.create(
-                body="⚠️ थोड़ी देर में try करें। 🙏",
-                from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
-                to=from_number
-            )
-        except:
-            pass
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    data = request.form
-    from_number = data.get('From')
-    body = data.get('Body', '').strip()
-    
-    print(f"\n📩 New message from {from_number}")
-    
-    with app.app_context():
-        customer = Customer.query.filter_by(phone=from_number).first()
-        if not customer:
-            business = Business.query.first()
-            customer = Customer(
-                business_id=business.id,
-                phone=from_number,
-                name=f"User_{from_number[-4:]}"
-            )
-            db.session.add(customer)
-            db.session.commit()
-            print(f"✅ New customer: {customer.name}")
-        
-        customer_data = {
-            'id': customer.id,
-            'name': customer.name,
-            'phone': customer.phone,
-            'balance': customer.balance
-        }
-    
-    executor.submit(send_quick_ack, from_number)
-    executor.submit(process_ai_response_async, from_number, body, customer_data)
-    
-    return "OK", 200
-
-# ========== HEALTH AND STATUS ENDPOINTS ==========
-@app.route('/')
-def home():
-    return "✅ DukaanAI Bot with Gemini 2.5 Flash!"
-
-@app.route('/health')
-def health():
-    return jsonify({
-        "status": "alive",
-        "time": datetime.now().isoformat(),
-        "version": "2.0",
-        "model": "Gemini 2.5 Flash"
-    })
-
-# ========== API ENDPOINTS ==========
+# API Routes
 @app.route('/api/products', methods=['GET'])
 def get_products():
     products = Product.query.all()
@@ -459,54 +65,268 @@ def get_products():
         'price': p.price,
         'stock': p.stock,
         'unit': p.unit,
-        'total_sold': p.total_sold
+        'total_sold': p.total_sold or 0
     } for p in products])
+
+@app.route('/api/products', methods=['POST'])
+def add_product():
+    data = request.json
+    product = Product(
+        name=data['name'],
+        price=float(data['price']),
+        stock=int(data['stock']),
+        unit=data['unit']
+    )
+    db.session.add(product)
+    db.session.commit()
+    return jsonify({'message': 'Product added', 'id': product.id}), 201
+
+@app.route('/api/products/<int:id>', methods=['PUT'])
+def update_product(id):
+    product = Product.query.get_or_404(id)
+    data = request.json
+    if 'name' in data:
+        product.name = data['name']
+    if 'price' in data:
+        product.price = float(data['price'])
+    if 'stock' in data:
+        product.stock = int(data['stock'])
+    if 'unit' in data:
+        product.unit = data['unit']
+    db.session.commit()
+    return jsonify({'message': 'Product updated'})
+
+@app.route('/api/products/<int:id>', methods=['DELETE'])
+def delete_product(id):
+    product = Product.query.get_or_404(id)
+    db.session.delete(product)
+    db.session.commit()
+    return jsonify({'message': 'Product deleted'})
+
+@app.route('/api/customers', methods=['GET'])
+def get_customers():
+    customers = Customer.query.all()
+    return jsonify([{
+        'id': c.id,
+        'name': c.name,
+        'phone': c.phone,
+        'balance': float(c.balance),
+        'total_orders': c.total_orders,
+        'total_spent': float(c.total_spent) if c.total_spent else 0,
+        'last_order_date': c.last_order_date
+    } for c in customers])
+
+@app.route('/api/customers', methods=['POST'])
+def add_customer():
+    data = request.json
+    customer = Customer(
+        name=data['name'],
+        phone=data['phone'],
+        balance=float(data.get('balance', 0))
+    )
+    db.session.add(customer)
+    db.session.commit()
+    return jsonify({'message': 'Customer added', 'id': customer.id}), 201
+
+@app.route('/api/customers/<int:id>', methods=['PUT'])
+def update_customer(id):
+    customer = Customer.query.get_or_404(id)
+    data = request.json
+    if 'name' in data:
+        customer.name = data['name']
+    if 'phone' in data:
+        customer.phone = data['phone']
+    if 'balance' in data:
+        customer.balance = float(data['balance'])
+    db.session.commit()
+    return jsonify({'message': 'Customer updated'})
+
+@app.route('/api/customers/<int:id>', methods=['DELETE'])
+def delete_customer(id):
+    customer = Customer.query.get_or_404(id)
+    db.session.delete(customer)
+    db.session.commit()
+    return jsonify({'message': 'Customer deleted'})
 
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
-    orders = Order.query.order_by(Order.created_at.desc()).all()
-    result = []
-    for o in orders:
-        customer = Customer.query.get(o.customer_id)
-        result.append({
-            'id': o.id,
-            'customer': customer.name if customer else 'Unknown',
-            'total': o.total,
-            'status': o.status,
-            'source': o.source,
-            'date': o.created_at.strftime('%Y-%m-%d')
-        })
-    return jsonify(result)
+    orders = Order.query.all()
+    return jsonify([{
+        'id': o.id,
+        'customer': o.customer_name,
+        'customer_phone': o.customer_phone,
+        'total': float(o.total),
+        'status': o.status,
+        'source': o.source,
+        'date': o.created_at.strftime('%Y-%m-%d'),
+        'time': o.created_at.strftime('%H:%M')
+    } for o in orders])
+
+@app.route('/api/orders/<int:id>', methods=['PATCH'])
+def update_order_status(id):
+    order = Order.query.get_or_404(id)
+    data = request.json
+    if 'status' in data:
+        order.status = data['status']
+        db.session.commit()
+    return jsonify({'message': 'Order updated'})
 
 @app.route('/api/dashboard', methods=['GET'])
-def dashboard():
+def get_dashboard():
     today = datetime.now().date()
-    week_ago = today - timedelta(days=7)
-    
-    today_orders = Order.query.filter(db.func.date(Order.created_at) == today).count()
-    today_revenue = db.session.query(db.func.sum(Order.total)).filter(db.func.date(Order.created_at) == today).scalar() or 0
-    pending_orders = Order.query.filter_by(status='pending').count()
-    low_stock = Product.query.filter(Product.stock < 10).count()
-    customers = Customer.query.count()
-    new_customers = Customer.query.filter(db.func.date(Customer.created_at) >= week_ago).count()
-    temp_orders = TempOrder.query.count()
+    today_orders = Order.query.filter(db.func.date(Order.created_at) == today).all()
     
     return jsonify({
-        'today': {'orders': today_orders, 'revenue': float(today_revenue)},
-        'pending': pending_orders,
-        'lowStock': low_stock,
-        'customers': {'total': customers, 'new': new_customers},
-        'tempOrders': temp_orders
+        'today': {
+            'orders': len(today_orders),
+            'revenue': sum(o.total for o in today_orders)
+        },
+        'pending': Order.query.filter_by(status='pending').count(),
+        'lowStock': Product.query.filter(Product.stock < 10).count(),
+        'customers': {
+            'total': Customer.query.count(),
+            'new': Customer.query.filter(db.func.date(Customer.created_at) == today).count()
+        }
     })
 
+@app.route('/api/analytics', methods=['GET'])
+def get_analytics():
+    from datetime import timedelta
+    today = datetime.now().date()
+    seven_days_ago = today - timedelta(days=6)
+    
+    all_orders = Order.query.all()
+    
+    revenue_trends = {}
+    for i in range(7):
+        d = today - timedelta(days=i)
+        revenue_trends[d.strftime('%m-%d')] = 0
+        
+    completed_orders = 0
+    cancelled_orders = 0
+    pending_orders = 0
+    
+    for order in all_orders:
+        if order.status == 'completed':
+            completed_orders += 1
+        elif order.status == 'cancelled':
+            cancelled_orders += 1
+        else:
+            pending_orders += 1
+            
+        order_date = order.created_at.date()
+        if order.status == 'completed' and order_date >= seven_days_ago:
+            date_str = order_date.strftime('%m-%d')
+            if date_str in revenue_trends:
+                revenue_trends[date_str] += order.total
+                
+    trend_data = [{'date': k, 'revenue': v} for k, v in sorted(revenue_trends.items())]
+    
+    top_products = Product.query.order_by(Product.total_sold.desc()).limit(5).all()
+    top_products_data = [{'name': p.name, 'sold': p.total_sold} for p in top_products]
+    
+    all_customers = Customer.query.all()
+    customer_growth = {}
+    for i in range(7):
+        d = today - timedelta(days=i)
+        customer_growth[d.strftime('%m-%d')] = 0
+        
+    for c in all_customers:
+        c_date = c.created_at.date()
+        if c_date >= seven_days_ago:
+            date_str = c_date.strftime('%m-%d')
+            if date_str in customer_growth:
+                customer_growth[date_str] += 1
+                
+    # Calculate cumulative for area chart
+    growth_data = []
+    running_total = Customer.query.filter(db.func.date(Customer.created_at) < seven_days_ago).count()
+    for k, v in sorted(customer_growth.items()):
+        running_total += v
+        growth_data.append({'date': k, 'customers': running_total})
+    
+    completion_rate = [
+        {'name': 'Completed', 'value': completed_orders},
+        {'name': 'Pending', 'value': pending_orders},
+        {'name': 'Cancelled', 'value': cancelled_orders}
+    ]
+    
+    return jsonify({
+        'revenueTrends': trend_data,
+        'topProducts': top_products_data,
+        'customerGrowth': growth_data,
+        'orderCompletion': completion_rate
+    })
+
+@app.route('/')
+def home():
+    return jsonify({'message': 'DukaanAI API is running!'})
+
+# ========== WHATSAPP BOT ==========
+def get_ai_response_bot(customer_name, customer_balance, message):
+    """Get AI response from Gemini - no please wait"""
+    try:
+        products = Product.query.limit(5).all()
+        product_list = "\n".join([f"{p.name}: ₹{p.price}/{p.unit} (stock: {p.stock})" for p in products])
+        
+        prompt = f"""You are a helpful shop assistant for an Indian grocery store.
+Customer: {customer_name}
+Balance: ₹{customer_balance}
+Available Products:\n{product_list}
+Customer message: {message}
+
+Reply in 1-2 lines in Hinglish (Hindi+English mix). Be friendly and helpful."""
+
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        response = model.generate_content(
+            prompt,
+            generation_config={'temperature': 0.5, 'max_output_tokens': 100}
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return "Thodi der mein try karein. 🙏"
+
+def process_whatsapp_message(from_number, body):
+    """Process message and send reply via Twilio — no acknowledgment message"""
+    try:
+        with app.app_context():
+            customer = Customer.query.filter_by(phone=from_number).first()
+            if not customer:
+                customer = Customer(
+                    phone=from_number,
+                    name=f"User_{from_number[-4:]}",
+                    balance=0
+                )
+                db.session.add(customer)
+                db.session.commit()
+
+            ai_reply = get_ai_response_bot(customer.name, customer.balance, body)
+
+        twilio_client.messages.create(
+            body=ai_reply,
+            from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+            to=from_number
+        )
+        print(f"✅ Replied to {from_number}: {ai_reply[:50]}...")
+    except Exception as e:
+        print(f"❌ WhatsApp error: {e}")
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """WhatsApp webhook - processes message and replies directly (no 'please wait')"""
+    from_number = request.form.get('From')
+    body = request.form.get('Body', '').strip()
+    print(f"📲 Message from {from_number}: {body}")
+    # Process in background thread so Twilio doesn't timeout
+    executor.submit(process_whatsapp_message, from_number, body)
+    return "OK", 200
+
+
+# Create tables
+with app.app_context():
+    db.create_all()
+    print("✅ Database tables created!")
+
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    print("\n" + "="*60)
-    print("🚀 DukaanAI Bot with Gemini 2.5 Flash")
-    print("="*60)
-    print(f"🤖 Model: Gemini 2.5 Flash")
-    print(f"✅ Port: {port}")
-    print("✅ Order Confirmation: Enabled")
-    print("✅ Temp Orders: 5 min expiry")
-    print("="*60 + "\n")
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000, debug=True)

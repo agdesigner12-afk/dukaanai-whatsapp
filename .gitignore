@@ -2,3 +2,7 @@
 __pycache__/
 instance/
 *.pyc
+venv/
+*.db
+app_original_bot.py
+populate_mock_data.py
