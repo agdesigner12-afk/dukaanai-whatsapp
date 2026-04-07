@@ -1,8 +1,23 @@
-.env
-__pycache__/
-instance/
-*.pyc
+# Python
+backend/__pycache__/
+backend/*.pyc
+backend/*.db
+backend/instance/
+backend/.env
 venv/
-*.db
-app_original_bot.py
-populate_mock_data.py
+
+# Node
+frontend/node_modules/
+frontend/build/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# Misc
+.DS_Store
+.vscode/
+*.swp

@@ -1,7 +1,9 @@
 services:
+  # Backend: Flask Web Service
   - type: web
-    name: dukaanai-whatsapp
+    name: dukaanai-backend
     runtime: python
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
@@ -13,3 +15,19 @@ services:
         value: +14155238886
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+
+  # Frontend: React Static Site
+  - type: static_site
+    name: dukaandash-dashboard
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    publishPath: build
+    envVars:
+      - key: REACT_APP_API_URL
+        fromService:
+          type: web
+          name: dukaanai-backend
+          property: host

@@ -284,7 +284,9 @@ Reply in 1-2 lines in Hinglish (Hindi+English mix). Be friendly and helpful."""
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Gemini Error: {e}")
+        import traceback
+        print(f"❌ Gemini Error Detailed: {str(e)}")
+        traceback.print_exc()
         return "Thodi der mein try karein. 🙏"
 
 def process_whatsapp_message(from_number, body):
