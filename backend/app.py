@@ -50,6 +50,8 @@ class Order(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     customer_name = db.Column(db.String(100))
     customer_phone = db.Column(db.String(20))
+    customer_gstin = db.Column(db.String(20), nullable=True)
+    items = db.Column(db.Text, nullable=True)  # Store JSON items
     total = db.Column(db.Float, default=0)
     status = db.Column(db.String(20), default='pending')
     source = db.Column(db.String(20), default='whatsapp')
@@ -158,6 +160,8 @@ def get_orders():
         'total': float(o.total),
         'status': o.status,
         'source': o.source,
+        'customer_gstin': o.customer_gstin,
+        'items': o.items,  # Already JSON string in DB
         'date': o.created_at.strftime('%Y-%m-%d'),
         'time': o.created_at.strftime('%H:%M')
     } for o in orders])

@@ -61,3 +61,28 @@ td {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.85; }
 }
+
+/* Print Styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  .App > div:not(.no-print) {
+    display: none !important;
+  }
+
+  #invoice-print-area {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}

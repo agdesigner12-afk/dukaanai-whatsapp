@@ -10,6 +10,18 @@ function App() {
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // Invoice state
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [selectedOrderForInvoice, setSelectedOrderForInvoice] = useState(null);
+  const [invoiceType, setInvoiceType] = useState('simple'); // 'simple' or 'tax'
+  const [businessInfo, setBusinessInfo] = useState({
+    name: 'DukaanAI Demo Shop',
+    address: '123 Market Street, New Delhi, India',
+    phone: '+91 98765 43210',
+    email: 'contact@dukaanai.com',
+    gstin: '07AAAAA0000A1Z5'
+  });
 
   // Product form state
   const [showProductForm, setShowProductForm] = useState(false);
@@ -240,6 +252,253 @@ function App() {
       console.error('Error:', error);
       alert('❌ Failed to update order status');
     }
+  };
+
+  const handeOpenInvoice = (order) => {
+    setSelectedOrderForInvoice(order);
+    setShowInvoiceModal(true);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const renderInvoiceModal = () => {
+    if (!showInvoiceModal || !selectedOrderForInvoice) return null;
+
+    const o = selectedOrderForInvoice;
+    const isTax = invoiceType === 'tax';
+    
+    // Calculations (Assuming 18% inclusive for Tax Invoice)
+    let subtotal = o.total;
+    let cgst = 0;
+    let sgst = 0;
+    let taxRate = 18;
+
+    if (isTax) {
+      subtotal = o.total / (1 + taxRate / 100);
+      cgst = (o.total - subtotal) / 2;
+      sgst = (o.total - subtotal) / 2;
+    }
+
+    return (
+      <div className="no-print" style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 2000,
+        padding: '1rem',
+        overflowY: 'auto'
+      }}>
+        <div style={{
+          background: 'white',
+          width: '100%',
+          maxWidth: '800px',
+          borderRadius: '12px',
+          maxHeight: '90vh',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {/* Modal Header */}
+          <div style={{
+            padding: '1rem 1.5rem',
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <h3 style={{ margin: 0 }}>Generate Invoice</h3>
+            <button 
+              onClick={() => setShowInvoiceModal(false)}
+              style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Modal Options */}
+          <div style={{ padding: '1rem 1.5rem', background: '#f9fafb', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <span style={{ fontWeight: '600' }}>Type:</span>
+            <button 
+              onClick={() => setInvoiceType('simple')}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: '6px',
+                border: 'none',
+                background: invoiceType === 'simple' ? '#075E54' : '#e5e7eb',
+                color: invoiceType === 'simple' ? 'white' : '#4b5563',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}
+            >
+              Simple Bill
+            </button>
+            <button 
+              onClick={() => setInvoiceType('tax')}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: '6px',
+                border: 'none',
+                background: invoiceType === 'tax' ? '#075E54' : '#e5e7eb',
+                color: invoiceType === 'tax' ? 'white' : '#4b5563',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}
+            >
+              Tax Invoice (GST)
+            </button>
+          </div>
+
+          {/* Invoice Body (The Printable Part) */}
+          <div id="invoice-print-area" style={{
+            padding: '2rem',
+            overflowY: 'auto',
+            flex: 1,
+            fontFamily: 'Arial, sans-serif'
+          }}>
+            {/* Business Details */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+              <div>
+                <h2 style={{ margin: '0 0 0.5rem 0', color: '#075E54' }}>{businessInfo.name}</h2>
+                <p style={{ margin: '0', fontSize: '0.9rem', color: '#6b7280' }}>{businessInfo.address}</p>
+                <p style={{ margin: '0', fontSize: '0.9rem', color: '#6b7280' }}>Phone: {businessInfo.phone}</p>
+                {isTax && businessInfo.gstin && (
+                  <p style={{ margin: '0.5rem 0 0 0', fontWeight: 'bold' }}>GSTIN: {businessInfo.gstin}</p>
+                )}
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <h1 style={{ margin: '0', fontSize: '1.5rem', opacity: 0.5 }}>{isTax ? 'TAX INVOICE' : 'BILL'}</h1>
+                <p style={{ margin: '0.5rem 0 0 0' }}>Invoice #: INV-{o.id}</p>
+                <p style={{ margin: '0' }}>Date: {o.date}</p>
+              </div>
+            </div>
+
+            {/* Customer Details */}
+            <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f9fafb', borderRadius: '8px' }}>
+              <h4 style={{ margin: '0 0 0.5rem 0', textTransform: 'uppercase', fontSize: '0.8rem', color: '#6b7280' }}>Bill To:</h4>
+              <p style={{ margin: '0', fontWeight: 'bold' }}>{o.customer}</p>
+              <p style={{ margin: '0' }}>Phone: {o.customer_phone}</p>
+              {isTax && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <label style={{ fontSize: '0.8rem', display: 'block' }}>Customer GSTIN (Optional):</label>
+                  <input 
+                    type="text"
+                    placeholder="Enter GSTIN"
+                    className="no-print"
+                    value={o.customer_gstin || ''}
+                    onChange={(e) => {
+                      // Update local state if needed, but for now just show
+                    }}
+                    style={{
+                      border: '1px solid #e5e7eb',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      marginTop: '4px',
+                      width: '200px'
+                    }}
+                  />
+                  <span className="print-only" style={{ display: 'none' }}>{o.customer_gstin}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Table */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '2rem' }}>
+              <thead>
+                <tr style={{ background: '#075E54', color: 'white' }}>
+                  <th style={{ padding: '0.75rem', textAlign: 'left' }}>Item Description</th>
+                  <th style={{ padding: '0.75rem', textAlign: 'center' }}>Qty</th>
+                  <th style={{ padding: '0.75rem', textAlign: 'right' }}>Rate</th>
+                  <th style={{ padding: '0.75rem', textAlign: 'right' }}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* For now, using the total since detail items might not be available */}
+                <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                  <td style={{ padding: '1rem' }}>Order from {o.source}</td>
+                  <td style={{ padding: '1rem', textAlign: 'center' }}>1</td>
+                  <td style={{ padding: '1rem', textAlign: 'right' }}>₹{subtotal.toFixed(2)}</td>
+                  <td style={{ padding: '1rem', textAlign: 'right' }}>₹{subtotal.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Totals */}
+            <div style={{ marginLeft: 'auto', width: '300px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span>Subtotal:</span>
+                <span>₹{subtotal.toFixed(2)}</span>
+              </div>
+              
+              {isTax && (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', color: '#6b7280' }}>
+                    <span>CGST (9%):</span>
+                    <span>₹{cgst.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', color: '#6b7280' }}>
+                    <span>SGST (9%):</span>
+                    <span>₹{sgst.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
+              
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', padding: '1rem 0', borderTop: '2px solid #075E54', fontWeight: 'bold', fontSize: '1.2rem' }}>
+                <span>Total:</span>
+                <span style={{ color: '#075E54' }}>₹{o.total.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '4rem', textAlign: 'center', fontSize: '0.9rem', color: '#9ca3af' }}>
+              <p>Thank you for your business! 🙏</p>
+              <p style={{ margin: '0' }}>Generated via DukaanAI Dashboard</p>
+            </div>
+          </div>
+
+          {/* Modal Footer */}
+          <div className="no-print" style={{
+            padding: '1.5rem',
+            borderTop: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '1rem'
+          }}>
+            <button
+              onClick={() => setShowInvoiceModal(false)}
+              style={{
+                padding: '0.75rem 1.5rem',
+                borderRadius: '8px',
+                border: '1px solid #e5e7eb',
+                background: 'white',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handlePrint}
+              style={{
+                padding: '0.75rem 1.5rem',
+                borderRadius: '8px',
+                border: 'none',
+                background: '#25D366',
+                color: 'white',
+                fontWeight: '600',
+                cursor: 'pointer'
+              }}
+            >
+              Print / Save PDF 🖨️
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Filter orders
@@ -727,19 +986,36 @@ function App() {
                     <td style={{ padding: '1rem', textTransform: 'capitalize' }}>{o.source}</td>
                     <td style={{ padding: '1rem' }}>{o.date} {o.time}</td>
                     <td style={{ padding: '1rem' }}>
-                      <button
-                        onClick={() => window.open(`https://wa.me/${o.customer_phone}`, '_blank')}
-                        style={{
-                          background: '#25D366',
-                          color: 'white',
-                          border: 'none',
-                          padding: '4px 12px',
-                          borderRadius: '4px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        WhatsApp
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          onClick={() => window.open(`https://wa.me/${o.customer_phone}`, '_blank')}
+                          style={{
+                            background: '#25D366',
+                            color: 'white',
+                            border: 'none',
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          WhatsApp
+                        </button>
+                        <button
+                          onClick={() => handeOpenInvoice(o)}
+                          style={{
+                            background: '#075E54',
+                            color: 'white',
+                            border: 'none',
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          Bill 📄
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1085,6 +1361,7 @@ function App() {
           </div>
         </div>
       )}
+      {renderInvoiceModal()}
     </div>
   );
 }
