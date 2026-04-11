@@ -35,6 +35,7 @@ class Product(db.Model):
     stock = db.Column(db.Integer, default=0)
     unit = db.Column(db.String(20), default='kg')
     total_sold = db.Column(db.Integer, default=0)
+    ignore_low_stock = db.Column(db.Boolean, default=False)
 
 class Customer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -67,7 +68,8 @@ def get_products():
         'price': p.price,
         'stock': p.stock,
         'unit': p.unit,
-        'total_sold': p.total_sold or 0
+        'total_sold': p.total_sold or 0,
+        'ignore_low_stock': bool(p.ignore_low_stock)
     } for p in products])
 
 @app.route('/api/products', methods=['POST'])
@@ -77,7 +79,8 @@ def add_product():
         name=data['name'],
         price=float(data['price']),
         stock=int(data['stock']),
-        unit=data['unit']
+        unit=data['unit'],
+        ignore_low_stock=data.get('ignore_low_stock', False)
     )
     db.session.add(product)
     db.session.commit()
@@ -95,6 +98,8 @@ def update_product(id):
         product.stock = int(data['stock'])
     if 'unit' in data:
         product.unit = data['unit']
+    if 'ignore_low_stock' in data:
+        product.ignore_low_stock = data['ignore_low_stock']
     db.session.commit()
     return jsonify({'message': 'Product updated'})
 
@@ -186,7 +191,7 @@ def get_dashboard():
             'revenue': sum(o.total for o in today_orders)
         },
         'pending': Order.query.filter_by(status='pending').count(),
-        'lowStock': Product.query.filter(Product.stock < 10).count(),
+        'lowStock': Product.query.filter(Product.stock < 10, Product.ignore_low_stock == False).count(),
         'customers': {
             'total': Customer.query.count(),
             'new': Customer.query.filter(db.func.date(Customer.created_at) == today).count()

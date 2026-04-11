@@ -30,8 +30,12 @@ function App() {
     name: '',
     price: '',
     unit: 'kg',
-    stock: ''
+    stock: '',
+    ignore_low_stock: false
   });
+
+  // Product filter state
+  const [productFilter, setProductFilter] = useState('all'); // 'all' or 'low'
 
   // Customer form state
   const [showCustomerForm, setShowCustomerForm] = useState(false);
@@ -571,7 +575,10 @@ function App() {
           <span style={{ fontSize: '1.3rem' }}>⚠️</span>
           <span>LOW STOCK ALERT: {dashboard.lowStock} product{dashboard.lowStock > 1 ? 's' : ''} running low!</span>
           <button
-            onClick={() => setActiveTab('products')}
+            onClick={() => {
+              setActiveTab('products');
+              setProductFilter('low');
+            }}
             style={{
               background: 'white',
               color: '#dc2626',
@@ -701,22 +708,45 @@ function App() {
       {activeTab === 'products' && (
         <div style={{ padding: '0 1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <h2 style={{ color: '#075E54' }}>📦 Products Catalog</h2>
-            <button
-              onClick={() => setShowProductForm(true)}
-              style={{
-                background: '#25D366',
-                color: 'white',
-                border: 'none',
-                padding: '0.75rem 1.5rem',
-                borderRadius: '30px',
-                fontSize: '1rem',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              + Add Product
-            </button>
+            <h2 style={{ color: '#075E54' }}>
+              📦 Products Catalog {productFilter === 'low' ? '(Low Stock)' : ''}
+            </h2>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <select 
+                value={productFilter}
+                onChange={(e) => setProductFilter(e.target.value)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '30px',
+                  border: '2px solid #25D366',
+                  background: 'white',
+                  fontWeight: '600',
+                  color: '#075E54',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="all">All Products</option>
+                <option value="low">Low Stock Only</option>
+              </select>
+              <button
+                onClick={() => {
+                  setShowProductForm(true);
+                  setNewProduct({ name: '', price: '', unit: 'kg', stock: '', ignore_low_stock: false });
+                }}
+                style={{
+                  background: '#25D366',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '30px',
+                  fontSize: '1rem',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                + Add Product
+              </button>
+            </div>
           </div>
           
           {/* Product Form Modal */}
@@ -787,6 +817,21 @@ function App() {
                   style={{ width: '100%', padding: '0.75rem', marginBottom: '1rem', border: '2px solid #e5e7eb', borderRadius: '8px' }}
                 />
                 
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', padding: '0.5rem', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fee2e2' }}>
+                  <input
+                    type="checkbox"
+                    id="ignore_low_stock"
+                    checked={editingProduct ? editingProduct.ignore_low_stock : newProduct.ignore_low_stock}
+                    onChange={(e) => editingProduct ? 
+                      setEditingProduct({...editingProduct, ignore_low_stock: e.target.checked}) :
+                      setNewProduct({...newProduct, ignore_low_stock: e.target.checked})}
+                    style={{ width: '20px', height: '20px', cursor: 'pointer' }}
+                  />
+                  <label htmlFor="ignore_low_stock" style={{ cursor: 'pointer', color: '#991b1b', fontWeight: '500' }}>
+                    Ignore Low Stock Alert (अलर्ट बंद करें)
+                  </label>
+                </div>
+                
                 <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
                   <button
                     onClick={editingProduct ? handleUpdateProduct : handleAddProduct}
@@ -841,24 +886,46 @@ function App() {
                   <th style={{ padding: '1rem', textAlign: 'left' }}>Product</th>
                   <th style={{ padding: '1rem', textAlign: 'left' }}>Price</th>
                   <th style={{ padding: '1rem', textAlign: 'left' }}>Stock</th>
-                  <th style={{ padding: '1rem', textAlign: 'left' }}>Unit</th>
+                  <th style={{ padding: '1rem', textAlign: 'left' }}>Status</th>
                   <th style={{ padding: '1rem', textAlign: 'left' }}>Sold</th>
                   <th style={{ padding: '1rem', textAlign: 'left' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {products.map(p => (
-                  <tr key={p.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                    <td style={{ padding: '1rem' }}>{p.name}</td>
+                {products
+                  .filter(p => {
+                    if (productFilter === 'low') {
+                      return p.stock < 10;
+                    }
+                    return true;
+                  })
+                  .map(p => (
+                  <tr key={p.id} style={{ borderBottom: '1px solid #e2e8f0', background: p.stock < 10 && p.ignore_low_stock ? '#f9fafb' : 'transparent' }}>
+                    <td style={{ padding: '1rem' }}>
+                      {p.name}
+                      {p.stock < 10 && !!p.ignore_low_stock && (
+                        <span style={{ marginLeft: '0.5rem', padding: '2px 8px', background: '#e5e7eb', borderRadius: '10px', fontSize: '0.7rem', color: '#4b5563' }}>
+                          🔕 Ignored
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: '1rem' }}>₹{p.price}</td>
                     <td style={{
                       padding: '1rem',
-                      color: p.stock < 10 ? '#ef4444' : '#10b981',
+                      color: p.stock < 10 ? (p.ignore_low_stock ? '#6b7280' : '#ef4444') : '#10b981',
                       fontWeight: '600'
                     }}>
                       {p.stock}
                     </td>
-                    <td style={{ padding: '1rem' }}>{p.unit}</td>
+                    <td style={{ padding: '1rem' }}>
+                      {p.stock < 10 ? (
+                        p.ignore_low_stock ? 
+                          <span style={{ color: '#6b7280' }}>Low (Ignored)</span> : 
+                          <span style={{ color: '#ef4444', fontWeight: 'bold' }}>⚠️ Low Stock</span>
+                      ) : (
+                        <span style={{ color: '#10b981' }}>In Stock</span>
+                      )}
+                    </td>
                     <td style={{ padding: '1rem' }}>{p.total_sold || 0}</td>
                     <td style={{ padding: '1rem' }}>
                       <button
