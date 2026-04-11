@@ -7,7 +7,7 @@ import re
 import json
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
-import google.generativeai as genai
+from openai import OpenAI
 from twilio.rest import Client
 
 load_dotenv()
@@ -19,15 +19,21 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///dukaanai.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# Twilio + Gemini setup
+# Twilio client
 twilio_client = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+
+# DeepSeek client (OpenAI-compatible)
+deepseek_client = OpenAI(
+    api_key=os.getenv('DEEPSEEK_API_KEY'),
+    base_url="https://api.deepseek.com/v1"
+)
+
 executor = ThreadPoolExecutor(max_workers=5)
 
-# ========== MODELS ==========
+# ========== DATABASE MODELS ==========
 class Business(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    phone = db.Column(db.String(20), unique=True, nullable=False)  # Twilio WhatsApp number
+    phone = db.Column(db.String(20), unique=True, nullable=False)
     name = db.Column(db.String(100), default="My Shop")
     address = db.Column(db.String(200), default="")
     gstin = db.Column(db.String(20), default="")
@@ -58,7 +64,7 @@ class Order(db.Model):
     total = db.Column(db.Float, default=0)
     status = db.Column(db.String(20), default='pending')
     source = db.Column(db.String(20), default='whatsapp')
-    items = db.Column(db.Text, default='[]')  # JSON string
+    items = db.Column(db.Text, default='[]')
     customer_gstin = db.Column(db.String(20), default='')
     created_at = db.Column(db.DateTime, default=datetime.now)
 
@@ -72,7 +78,7 @@ class OrderItem(db.Model):
 # ========== CREATE TABLES & MIGRATE ==========
 with app.app_context():
     db.create_all()
-    # Add missing columns to Business table if not exist
+    # Add missing columns if needed
     try:
         db.session.execute('ALTER TABLE business ADD COLUMN name VARCHAR(100) DEFAULT "My Shop"')
     except: pass
@@ -82,17 +88,24 @@ with app.app_context():
     try:
         db.session.execute('ALTER TABLE business ADD COLUMN gstin VARCHAR(20) DEFAULT ""')
     except: pass
-    # Create default business if none
+    try:
+        db.session.execute('ALTER TABLE "order" ADD COLUMN items TEXT DEFAULT "[]"')
+    except: pass
+    try:
+        db.session.execute('ALTER TABLE "order" ADD COLUMN customer_gstin VARCHAR(20) DEFAULT ""')
+    except: pass
+
+    # Create default business if none exists
     if Business.query.count() == 0:
         default_biz = Business(
-            phone=os.getenv('TWILIO_WHATSAPP_NUMBER'),
+            phone=os.getenv('TWILIO_WHATSAPP_NUMBER', '+14155238886'),
             name="DukaanAI Shop",
             address="123, Main Market, New Delhi",
             gstin="07AAACA1234A1Z"
         )
         db.session.add(default_biz)
         db.session.commit()
-    print("✅ Database tables created/verified!")
+    print("✅ Database ready")
 
 # ========== HELPER: GET BUSINESS DETAILS ==========
 def get_business():
@@ -118,18 +131,13 @@ def api_get_business():
 def api_update_business():
     data = request.json
     biz = get_business()
-    if 'name' in data:
-        biz.name = data['name']
-    if 'address' in data:
-        biz.address = data['address']
-    if 'phone' in data:
-        biz.phone = data['phone']
-    if 'gstin' in data:
-        biz.gstin = data['gstin']
+    if 'name' in data: biz.name = data['name']
+    if 'address' in data: biz.address = data['address']
+    if 'phone' in data: biz.phone = data['phone']
+    if 'gstin' in data: biz.gstin = data['gstin']
     db.session.commit()
     return jsonify({'message': 'Business details updated'})
 
-# Products API (same as before, omitted for brevity, but keep your existing endpoints)
 @app.route('/api/products', methods=['GET'])
 def get_products():
     products = Product.query.all()
@@ -173,9 +181,6 @@ def delete_product(id):
     db.session.commit()
     return jsonify({'message': 'Product deleted'})
 
-# Customers, Orders, Analytics endpoints (keep your existing ones)
-# ... (I'll include essential ones, but you can keep yours)
-
 @app.route('/api/customers', methods=['GET'])
 def get_customers():
     customers = Customer.query.all()
@@ -204,6 +209,15 @@ def get_orders():
         'items': json.loads(o.items) if o.items else []
     } for o in orders])
 
+@app.route('/api/orders/<int:id>', methods=['PATCH'])
+def update_order_status(id):
+    order = Order.query.get_or_404(id)
+    data = request.json
+    if 'status' in data:
+        order.status = data['status']
+        db.session.commit()
+    return jsonify({'message': 'Order updated'})
+
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     today = datetime.now().date()
@@ -221,7 +235,17 @@ def get_dashboard():
         }
     })
 
-# ========== WHATSAPP BOT (UPDATED WITH BUSINESS DETAILS) ==========
+@app.route('/api/analytics', methods=['GET'])
+def get_analytics():
+    # Simple placeholder – you can expand later
+    return jsonify({
+        'revenueTrends': [],
+        'topProducts': [],
+        'customerGrowth': [],
+        'orderCompletion': []
+    })
+
+# ========== WHATSAPP BOT WITH DEEPSEEK ==========
 def get_business_details():
     biz = get_business()
     return {
@@ -232,52 +256,54 @@ def get_business_details():
     }
 
 def get_ai_response_bot(customer, message):
-    """AI response with multiple Gemini model fallback"""
-    models_to_try = [
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-flash-latest',
-        'gemini-pro',
-        'gemini-1.0-pro'
-    ]
-    products = Product.query.limit(3).all()
-    product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
-    prompt = f"""Customer: {customer.name}
+    """AI response using DeepSeek API"""
+    try:
+        # Fetch products for context (limit to 3 for speed)
+        products = Product.query.limit(3).all()
+        product_list = "\n".join([f"{p.name}: ₹{p.price}" for p in products]) if products else "कोई प्रोडक्ट नहीं"
+
+        prompt = f"""Customer: {customer.name}
 Balance: ₹{customer.balance}
 Message: {message}
 Products: {product_list}
+
 Short Hinglish reply (1-2 lines):"""
-    for model_name in models_to_try:
-        try:
-            print(f"🤖 Trying model: {model_name}")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt, generation_config={'temperature': 0.5, 'max_output_tokens': 100})
-            return response.text.strip()
-        except Exception as e:
-            print(f"⚠️ Model {model_name} failed: {e}")
-            continue
-    return "थोड़ी देर में try करें। 🙏"
+
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are DukaanAI, a friendly Hindi/English WhatsApp assistant for a small shop. Keep replies very short (1-2 lines)."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=80
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"❌ DeepSeek API error: {e}")
+        return "थोड़ी देर में try करें। 🙏"
 
 def process_whatsapp_message(from_number, body):
     try:
         with app.app_context():
             customer = Customer.query.filter_by(phone=from_number).first()
             if not customer:
-                customer = Customer(phone=from_number, name=f"User_{from_number[-4:]}", balance=0)
+                customer = Customer(
+                    phone=from_number,
+                    name=f"User_{from_number[-4:]}",
+                    balance=0
+                )
                 db.session.add(customer)
                 db.session.commit()
-            # Handle order detection (simplified, but you can integrate your full logic)
-            # For brevity, we call AI for normal messages
+
             reply = get_ai_response_bot(customer, body)
-            # If you want to include business name in reply, you can prepend
-            # biz = get_business_details()
-            # reply = f"🏪 {biz['name']} says: {reply}"
+
         twilio_client.messages.create(
             body=reply,
             from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
             to=from_number
         )
-        print(f"✅ Replied to {from_number}")
+        print(f"✅ Replied to {from_number}: {reply[:50]}...")
     except Exception as e:
         print(f"❌ WhatsApp error: {e}")
 
@@ -288,6 +314,11 @@ def webhook():
     print(f"📲 Message from {from_number}: {body}")
     executor.submit(process_whatsapp_message, from_number, body)
     return "OK", 200
+
+# ========== ROOT ==========
+@app.route('/')
+def home():
+    return jsonify({'message': 'DukaanAI API is running with DeepSeek AI!'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
