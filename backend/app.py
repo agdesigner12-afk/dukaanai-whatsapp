@@ -1,5 +1,3 @@
-# backend/app.py – DeepSeek via requests (no OpenAI client)
-
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -15,6 +13,7 @@ import requests
 import traceback
 import time
 from concurrent.futures import ThreadPoolExecutor
+from apscheduler.schedulers.background import BackgroundScheduler
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 load_dotenv()
@@ -41,10 +40,11 @@ class Customer(db.Model):
     business_id = db.Column(db.Integer, db.ForeignKey('business.id'))
     phone = db.Column(db.String(20), index=True)
     name = db.Column(db.String(100))
-    balance = db.Column(db.Float, default=0.0)
+    balance = db.Column(db.Float, default=0.0)          # positive = customer owes money
     total_orders = db.Column(db.Integer, default=0)
     total_spent = db.Column(db.Float, default=0.0)
     last_order_date = db.Column(db.DateTime, nullable=True)
+    last_reminder_date = db.Column(db.DateTime, nullable=True)   # for weekly reminders
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Product(db.Model):
@@ -63,11 +63,11 @@ class Order(db.Model):
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
     items = db.Column(db.Text)
     total = db.Column(db.Float)
-    status = db.Column(db.String(20), default='pending', index=True)
+    status = db.Column(db.String(20), default='pending')
     source = db.Column(db.String(20), default='whatsapp')
     payment_method = db.Column(db.String(20), default='cash')
     notes = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime, nullable=True)
 
 class Conversation(db.Model):
@@ -143,6 +143,8 @@ def create_order_from_temp(temp):
         customer.total_orders += 1
         customer.total_spent += temp.total
         customer.last_order_date = datetime.utcnow()
+        # Increase balance (customer owes money)
+        customer.balance += temp.total
         db.session.delete(temp)
         db.session.commit()
         return True, order
@@ -185,6 +187,60 @@ Short Hinglish reply (1-2 lines):"""
         print(f"AI error: {e}")
         return "थोड़ी देर में try करें। 🙏"
 
+# ------------------------- KHATABOOK FUNCTIONS (Udhaar) -------------------------
+def add_balance(customer_phone, amount, description=""):
+    """Increase customer's balance (customer owes more)"""
+    customer = Customer.query.filter_by(phone=customer_phone).first()
+    if not customer:
+        return False, "Customer not found"
+    customer.balance += amount
+    db.session.commit()
+    return True, f"₹{amount} added to {customer.name}'s balance. Total due: ₹{customer.balance}"
+
+def reduce_balance(customer_phone, amount):
+    """Reduce balance when customer pays"""
+    customer = Customer.query.filter_by(phone=customer_phone).first()
+    if not customer:
+        return False, "Customer not found"
+    if amount > customer.balance:
+        return False, f"Amount exceeds current due ₹{customer.balance}"
+    customer.balance -= amount
+    db.session.commit()
+    return True, f"Payment of ₹{amount} received. Remaining due: ₹{customer.balance}"
+
+# ------------------------- WEEKLY REMINDER JOB -------------------------
+def send_weekly_reminders():
+    """Run every Sunday at 9 AM. Send reminder to customers with balance > 0."""
+    with app.app_context():
+        today = datetime.utcnow().date()
+        # Only send if today is Sunday (weekday() returns 6 for Sunday)
+        if today.weekday() != 6:
+            return
+        customers = Customer.query.filter(Customer.balance > 0).all()
+        biz = Business.query.first()
+        shop_name = biz.business_name if biz else "DukaanAI Shop"
+        for cust in customers:
+            # Skip if already reminded this week
+            if cust.last_reminder_date and (today - cust.last_reminder_date.date()).days < 7:
+                continue
+            msg = f"🔔 *Reminder from {shop_name}*\n\nनमस्ते {cust.name}, आपका ₹{cust.balance} बकाया है। कृपया जल्दी भुगतान करें।\nधन्यवाद! 🙏"
+            try:
+                twilio_client.messages.create(
+                    body=msg,
+                    from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}',
+                    to=cust.phone
+                )
+                cust.last_reminder_date = datetime.utcnow()
+                db.session.commit()
+                print(f"Reminder sent to {cust.name} ({cust.phone})")
+            except Exception as e:
+                print(f"Failed to send reminder to {cust.name}: {e}")
+
+# Schedule weekly reminders – runs every Sunday at 9 AM
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=send_weekly_reminders, trigger="cron", day_of_week='sun', hour=9, minute=0)
+scheduler.start()
+
 # ------------------------- WHATSAPP HANDLER -------------------------
 def process_message(from_number, body):
     try:
@@ -195,11 +251,53 @@ def process_message(from_number, body):
                 customer = Customer(business_id=biz.id, phone=from_number, name=f"User_{from_number[-4:]}")
                 db.session.add(customer)
                 db.session.commit()
-            # Pending order?
+            msg_lower = body.lower().strip()
+
+            # ---- KHATABOOK COMMANDS (for shopkeeper – simple, can be extended) ----
+            # Add udhaar (shopkeeper only – maybe protect with a secret code)
+            if msg_lower.startswith("add udhaar ") or msg_lower.startswith("add udhaar"):
+                # Format: add udhaar <phone> <amount> or add udhaar <customer name> <amount>
+                parts = body.split()
+                if len(parts) >= 3:
+                    # try to find by phone or name
+                    target = parts[2]
+                    amount = float(parts[3]) if len(parts) > 3 else 0
+                    cust = Customer.query.filter((Customer.phone == target) | (Customer.name == target)).first()
+                    if cust and amount > 0:
+                        success, res = add_balance(cust.phone, amount)
+                        reply = res
+                    else:
+                        reply = "❌ Customer not found or invalid amount"
+                else:
+                    reply = "Usage: add udhaar <customer name/phone> <amount>"
+                twilio_client.messages.create(body=reply, from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
+                return
+
+            # Pay command (customer pays)
+            if msg_lower.startswith("pay "):
+                parts = body.split()
+                if len(parts) >= 2:
+                    try:
+                        amount = float(parts[1])
+                        success, res = reduce_balance(customer.phone, amount)
+                        reply = res
+                    except:
+                        reply = "❌ Invalid amount"
+                else:
+                    reply = "Usage: pay <amount>"
+                twilio_client.messages.create(body=reply, from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
+                return
+
+            # Check balance
+            if msg_lower in ['balance', 'बाकी', 'kitna baki hai', 'my balance']:
+                reply = f"💰 {customer.name}, आपका ₹{customer.balance} बकाया है।"
+                twilio_client.messages.create(body=reply, from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
+                return
+
+            # ---- ORDER FLOW (existing) ----
             pending = TempOrder.query.filter_by(customer_id=customer.id).first()
             if pending:
-                msg = body.lower()
-                if any(w in msg for w in ['ha','han','haan','yes','confirm','ok','ठीक है','हाँ','कन्फर्म']):
+                if any(w in msg_lower for w in ['ha','han','haan','yes','confirm','ok','ठीक है','हाँ','कन्फर्म']):
                     ok, result = create_order_from_temp(pending)
                     if ok:
                         reply = f"""✅ *ऑर्डर कन्फर्म!*
@@ -210,7 +308,7 @@ def process_message(from_number, body):
 धन्यवाद! 🙏"""
                     else:
                         reply = f"❌ {result}"
-                elif any(w in msg for w in ['nahi','no','cancel','mat karo','नहीं','कैंसल']):
+                elif any(w in msg_lower for w in ['nahi','no','cancel','mat karo','नहीं','कैंसल']):
                     db.session.delete(pending)
                     db.session.commit()
                     reply = "❌ ऑर्डर कैंसल कर दिया गया।"
@@ -227,14 +325,14 @@ def process_message(from_number, body):
                 twilio_client.messages.create(body=reply, from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
                 return
 
-            # New order detection
+            # New order detection (existing)
             patterns = [
                 (r'(\d+)\s*(?:kg|किलो)\s*(?:चाय|chai|tea|patti)', 'चाय', 'kg'),
                 (r'(\d+)\s*(?:kg|किलो)\s*(?:नमक|namak|salt)', 'नमक', 'kg'),
                 (r'(\d+)\s*(?:piece|पीस)\s*(?:बिस्कुट|biscuit)', 'बिस्कुट', 'piece'),
             ]
             for pat, ptype, unit in patterns:
-                m = re.search(pat, body.lower())
+                m = re.search(pat, msg_lower)
                 if m:
                     qty = int(m.group(1))
                     prod = None
@@ -272,7 +370,7 @@ def process_message(from_number, body):
                         twilio_client.messages.create(body=f"❌ केवल {prod.stock} {prod.unit} स्टॉक में है।", from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
                         return
 
-            # No order – use AI
+            # Default: AI reply
             ai_reply = get_ai_reply(customer, body)
             twilio_client.messages.create(body=ai_reply, from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
             print(f"✅ Replied to {from_number}")
@@ -281,7 +379,8 @@ def process_message(from_number, body):
         traceback.print_exc()
         try:
             twilio_client.messages.create(body="⚠️ थोड़ी देर में try करें। 🙏", from_=f'whatsapp:{os.getenv("TWILIO_WHATSAPP_NUMBER")}', to=from_number)
-        except: pass
+        except:
+            pass
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -293,7 +392,7 @@ def webhook():
 
 @app.route('/')
 def home():
-    return "✅ DukaanAI Bot (DeepSeek) is running"
+    return "✅ DukaanAI Bot with Khatabook & Weekly Reminders"
 
 @app.route('/health')
 def health():
@@ -388,16 +487,17 @@ def dashboard():
     low_stock = Product.query.filter(Product.stock < 10).count()
     customers = Customer.query.count()
     new_customers = Customer.query.filter(db.func.date(Customer.created_at) >= week_ago).count()
+    total_balance = db.session.query(db.func.sum(Customer.balance)).scalar() or 0
     return jsonify({
         'today': {'orders': today_orders, 'revenue': float(today_revenue)},
         'pending': pending,
         'lowStock': low_stock,
-        'customers': {'total': customers, 'new': new_customers}
+        'customers': {'total': customers, 'new': new_customers},
+        'totalBalance': float(total_balance)
     })
 
 @app.route('/api/analytics', methods=['GET'])
 def analytics():
-    # simple placeholder to avoid 404
     return jsonify({'revenueTrends': [], 'topProducts': [], 'customerGrowth': [], 'orderCompletion': []})
 
 if __name__ == '__main__':
